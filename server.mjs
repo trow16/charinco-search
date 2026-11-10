@@ -1,4 +1,4 @@
-// ローカル開発用サーバー（本番は Vercel が public/ と api/ をそのまま配信する）
+// Charinco Search のサーバー：public/ を配信し、/api/* を api/ の各ファイルに渡す
 import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";

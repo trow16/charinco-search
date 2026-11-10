@@ -19,7 +19,7 @@
 ```
 public/        フロントエンド（素のHTML/CSS/JS、ビルド不要）
   clipcore.js  切り抜きの中核（範囲の要素集め・見た目ごとの書き出し）。裏の Chrome のページでも同じものを動かす
-api/           Vercel サーバーレス関数
+api/           サーバーの API（server.mjs が呼び出す）
   parallel.js  平行サジェスチョン：元の書架の判定と、他の9書架へのずらし（Claude）
   search.js    Web検索（Brave Search API）。動画・SNS・ECの商品ページ・PDFなど、切り抜けない結果は lib/filter.js で除く
   clip.js      スクラップ用のページ取得（サニタイズはブラウザ側の DOMPurify）
@@ -28,7 +28,7 @@ api/           Vercel サーバーレス関数
   live.js      ライブ表示：裏の Chrome のタブの画面を流し、クリック・スクロール・キー入力を中継する（lib/live.js）
 lib/           共通処理
 extension/     Chrome 拡張機能「Charinco 切り抜き」（ふつうのタブの上で切り抜いてボードに送る）
-server.mjs     ローカル開発用サーバー
+server.mjs     サーバー（http://localhost:3000）
 ```
 
 - AI: Claude Opus 5.5（`claude-opus-5-5`、effort: low、JSON Schema による構造化出力）
@@ -87,17 +87,6 @@ Chrome を起動できない環境では、ページのスクリプトが動い�
 - フォント・動画・広告・アクセス解析・Cookie 同意バナーは写し取りの際には読み込みません。画像は「読み込めた」ことにして中身を省きます（本物は表示する側が読みます）。
 - Chrome のキャッシュは一時フォルダ（`charinco-chrome-ポート番号`）に残すので、同じサイトの2ページ目からは速くなります。
 - Chrome の場所が違う場合は `CHROME_PATH` で指定できます。`CHARINCO_RENDER=0` で再現表示を止められます。
-
-## Vercel に公開する
-
-1. このフォルダを GitHub に push し、Vercel で「Add New → Project」から取り込む（Framework Preset は **Other** のまま）。
-   - CLI を使う場合は `npx vercel` → `npx vercel --prod`。
-2. Project Settings → Environment Variables に以下を設定する。
-   - `ANTHROPIC_API_KEY`
-   - `BRAVE_API_KEY`
-   - `ACCESS_CODE`（任意・推奨）: 設定すると、初回アクセス時に合言葉を聞かれる。URLを知っている第三者に API 料金を使われるのを防ぐ。
-   - `BRAVE_GAP_MS`（任意）: 毎秒1回に制限されたキーを使う場合は `1050` にする（既定 0 = 全検索を同時に送る）。
-3. 再デプロイする。
 
 ## 1回の検索で行う処理
 
