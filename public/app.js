@@ -87,12 +87,12 @@ function remember(map, key, make, max) {
   return map.get(key);
 }
 
-function toast(msg) {
+function toast(msg, ms = 2200) {
   const t = $("#toast");
   t.textContent = msg;
   t.classList.add("show");
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => t.classList.remove("show"), 2200);
+  toast.timer = setTimeout(() => t.classList.remove("show"), ms);
 }
 
 // 公開環境で ACCESS_CODE が設定されている場合の合言葉
@@ -599,18 +599,45 @@ function openBook(b) {
   if (!wasOpen) pushNav();
   else replaceNav();
 }
-// Charinco 切り抜きの拡張機能が入っているか（extension/bridge.js が印を付ける）
+// Charinco 切り抜きの拡張機能が入っているか（extension/bridge.js が、拡張機能とつながったら印を付ける）
 const hasExtension = () => document.documentElement.dataset.charincoExt === "1";
-$("#bookClip").addEventListener("click", () => {
+// 拡張機能に、隣のタブで開いてもらう。開けたかは、拡張機能の返事か、隣のタブに切り替わってこのページが隠れたことで確かめる
+// （古い版の拡張機能は返事をしない）。どちらもなければ開けなかったとみなす
+function openInExtension(url) {
+  const id = uid();
+  return new Promise((resolve) => {
+    const finish = (ok) => {
+      clearTimeout(timer);
+      removeEventListener("message", onAnswer);
+      document.removeEventListener("visibilitychange", onHidden);
+      resolve(ok);
+    };
+    const onAnswer = (e) => e.source === window && e.data?.charincoExt === "opened" && e.data.id === id && finish(!!e.data.ok);
+    const onHidden = () => document.hidden && finish(true);
+    const timer = setTimeout(() => finish(false), 2000);
+    addEventListener("message", onAnswer);
+    document.addEventListener("visibilitychange", onHidden);
+    window.postMessage({ charinco: "open", url, id }, location.origin);
+  });
+}
+$("#bookClip").addEventListener("click", async (e) => {
+  const b = openedBook;
+  const btn = e.currentTarget;
   // 拡張機能があれば、ふつうの Chrome のタブで開いて、その上で切り抜いてもらう
   if (hasExtension()) {
-    window.postMessage({ charinco: "open", url: openedBook.url }, location.origin);
-    toast("隣のタブで開きました。右下の「✂ 切り抜き」（C キー）で切り抜けます");
-    return;
+    btn.disabled = true;
+    const ok = await openInExtension(b.url);
+    btn.disabled = false;
+    if (ok) return toast("隣のタブで開きました。右下の「✂ 切り抜き」（C キー）で切り抜けます");
+    // 拡張機能が応えない（拡張機能を入れ直した後でこのタブとつながっていない、拡張機能のフォルダが見つからない など）。
+    // ここで開き、このタブでは以後も Charinco の切り抜き画面を使う
+    delete document.documentElement.dataset.charincoExt;
+    btn.textContent = "切り抜く";
+    toast("拡張機能が応えないので、ここで開きました。拡張機能を使うときは、chrome://extensions で更新（↻）してから、このタブを読み込み直してください", 7000);
   }
   // 本の説明の履歴を切り抜き画面に置き換える（戻ると図書館に戻る）
   $("#drawer").hidden = true;
-  openReader(openedBook);
+  openReader(b);
   replaceNav();
 });
 $("#bookPin").addEventListener("click", () => {

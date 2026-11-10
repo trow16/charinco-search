@@ -2,13 +2,29 @@
 (() => {
   // Charinco のページかどうか（同じ localhost の別のアプリでは何もしない）
   if (!document.getElementById("board") || !document.querySelector('meta[name="charinco"]')) return;
-  // ページ側から「拡張機能が入っている」と分かるように
-  document.documentElement.dataset.charincoExt = "1";
+  const root = document.documentElement;
+  // 拡張機能を読み込み直すと、このページとのつながりは切れる（ページを読み込み直すまで、拡張機能に頼めない）
+  const send = (msg) => {
+    try {
+      return chrome.runtime.sendMessage(msg);
+    } catch (err) {
+      return Promise.reject(err);
+    }
+  };
 
-  // ページ → 拡張機能（「切り抜く」でページを開く）
+  // 拡張機能の裏方（background.js）とつながったら、ページ側に「拡張機能が使える」と知らせる。
+  // つながらない（拡張機能のフォルダが見つからない・動いていない など）ときは知らせず、Charinco は自分の切り抜き画面を使う。
+  // 返事をもらうときに、開いていない間の切り抜きも届く
+  send({ type: "bridge-ready" }).then((r) => r?.ok && (root.dataset.charincoExt = "1"), () => {});
+
+  // ページ → 拡張機能（「切り抜く」でページを開く）。開けたかどうかをページに返す
   window.addEventListener("message", (e) => {
     if (e.source !== window || e.data?.charinco !== "open") return;
-    chrome.runtime.sendMessage({ type: "open", url: String(e.data.url || "") });
+    const answer = (ok) => {
+      if (!ok) delete root.dataset.charincoExt; // このページでは、以後 Charinco の切り抜き画面を使う
+      window.postMessage({ charincoExt: "opened", id: e.data.id, ok }, location.origin);
+    };
+    send({ type: "open", url: String(e.data.url || "") }).then((r) => answer(!!r?.ok), () => answer(false));
   });
 
   // 拡張機能 → ページ（切り抜きを貼る）
@@ -23,7 +39,4 @@
       reply({ ok: true });
     }
   });
-
-  // 開いていない間に切り抜いたものを受け取る
-  chrome.runtime.sendMessage({ type: "bridge-ready" });
 })();
