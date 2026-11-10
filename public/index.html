@@ -80,10 +80,21 @@
     <!-- HTMLスクラップボード -->
     <section class="view" id="view-board" hidden>
       <div class="board-tools">
+        <!-- ボードの切り替え・作成 -->
+        <div class="boards" role="group" aria-label="ボード">
+          <select id="boardSelect" aria-label="表示するボード"></select>
+          <button id="boardNew" title="空のボードを新しく作る">＋ 新しいボード</button>
+          <button id="boardRename" title="このボードの名前を変える">名前を変える</button>
+          <button id="boardDelete" class="danger" title="このボードを削除する">削除</button>
+        </div>
+        <span class="sep" aria-hidden="true"></span>
         <button id="addNote">付箋を貼る</button>
         <button id="linkMode" aria-pressed="false">糸でつなぐ</button>
         <span class="spacer"></span>
-        <button id="exportBoard">HTMLとして保存</button>
+        <button id="boardExport" title="このボードをファイル（.json）に書き出す。「読み込む」で戻せます">書き出す</button>
+        <button id="boardImport" title="書き出したファイル（.json）を、新しいボードとして読み込む">読み込む</button>
+        <input type="file" id="boardFile" accept=".json,application/json" hidden>
+        <button id="exportBoard" title="ブラウザで見られる1枚のHTMLにする（読み込みには使えません）">HTMLとして保存</button>
         <button id="clearBoard" class="danger">全部はがす</button>
       </div>
       <div class="board-scroll" id="boardScroll">

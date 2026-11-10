@@ -63,6 +63,11 @@ const store = {
       return null;
     }
   },
+  remove(key) {
+    try {
+      localStorage.removeItem(key);
+    } catch {}
+  },
   /** 保存できなければそのエラーを返す */
   set(key, value) {
     try {
@@ -1831,20 +1836,56 @@ function renderSimple(page, fallback) {
 /* =========================================================
    HTMLスクラップボード
    ========================================================= */
-const STORE = "charinco.board.v1";
-let board = { cards: [], links: [] };
-{
-  const saved = store.getJSON(STORE);
-  if (saved?.cards) board = saved;
+// ボードは複数持てる。一覧（名前・枚数）と、ボードごとの中身・表示位置を別々に localStorage に置く
+//   charinco.boards.v1      … { current, list: [{ id, name, count }] }
+//   charinco.board.<id>     … { cards, links }
+//   charinco.view.<id>      … { zoom, x, y }
+const uid = () => Math.random().toString(36).slice(2, 10);
+const BOARDS_KEY = "charinco.boards.v1";
+const boardKey = (id) => `charinco.board.${id}`;
+const viewKey = (id) => `charinco.view.${id}`;
+const emptyBoard = () => ({ cards: [], links: [] });
+const loadBoard = (id) => {
+  const b = store.getJSON(boardKey(id));
+  return Array.isArray(b?.cards) ? { cards: b.cards, links: Array.isArray(b.links) ? b.links : [] } : emptyBoard();
+};
+const saveBoards = () => store.set(BOARDS_KEY, boards);
+const currentEntry = () => boards.list.find((x) => x.id === boards.current);
+
+let boards = store.getJSON(BOARDS_KEY);
+if (!Array.isArray(boards?.list) || !boards.list.length) {
+  // 前の版（ボードが1つだけ）から引き継ぐ
+  const id = uid();
+  const old = store.getJSON("charinco.board.v1");
+  const first = Array.isArray(old?.cards) ? old : emptyBoard();
+  boards = { current: id, list: [{ id, name: "ボード 1", count: first.cards.length }] };
+  // 容量に余裕がなければ、古い方を消してから書く（中身は手元にある）。それでも書けなければ古い方に戻す
+  if (store.set(boardKey(id), first)) {
+    store.remove("charinco.board.v1");
+    if (store.set(boardKey(id), first)) store.set("charinco.board.v1", first);
+  }
+  if (store.getJSON(boardKey(id))) {
+    const oldView = store.getJSON("charinco-view");
+    if (oldView) store.set(viewKey(id), oldView);
+    saveBoards();
+    for (const k of ["charinco.board.v1", "charinco-view", "charinco-zoom"]) store.remove(k);
+  }
 }
+if (!currentEntry()) boards.current = boards.list[0].id;
+let board = loadBoard(boards.current);
+
 const save = () => {
-  if (store.set(STORE, board)?.name === "QuotaExceededError")
-    toast("保存容量がいっぱいです。いくつかカードをはがすか「HTMLとして保存」してください");
+  if (store.set(boardKey(boards.current), board)?.name === "QuotaExceededError")
+    toast("保存容量がいっぱいです。いくつかカードをはがすか、使わないボードを「書き出す」してから削除してください");
+  const entry = currentEntry();
+  if (entry && entry.count !== board.cards.length) {
+    entry.count = board.cards.length;
+    saveBoards();
+    renderBoardSelect();
+  }
   $("#boardCount").textContent = board.cards.length;
   $("#boardEmpty").hidden = board.cards.length > 0;
 };
-
-const uid = () => Math.random().toString(36).slice(2, 10);
 
 function addCard(card) {
   const scroll = $("#boardScroll");
@@ -2010,23 +2051,24 @@ function renderBoard() {
 // 表示域（#boardScroll）は固定し、ボードを translate(panX, panY) scale(zoom) で動かす。
 // panX/panY は「ボードの原点(0,0)が表示域のどこに来るか」（画面px）
 const ZOOM_MIN = 0.25, ZOOM_MAX = 2;
-const VIEW_KEY = "charinco-view";
 const clampZoom = (z) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
 let zoom = 1, panX = 0, panY = 0;
-{
-  const v = store.getJSON(VIEW_KEY);
-  if (v) {
-    zoom = clampZoom(Number(v.zoom) || 1);
-    panX = Number(v.x) || 0;
-    panY = Number(v.y) || 0;
-  } else {
-    zoom = clampZoom(Number(store.get("charinco-zoom")) || 1); // 前の版で保存した倍率
-  }
+// ボードごとに、最後に見ていた倍率と位置を覚えておく
+function loadView(id) {
+  const v = store.getJSON(viewKey(id));
+  zoom = clampZoom(Number(v?.zoom) || 1);
+  panX = Number(v?.x) || 0;
+  panY = Number(v?.y) || 0;
 }
+loadView(boards.current);
 let viewSaveTimer = 0;
+const writeView = () => {
+  clearTimeout(viewSaveTimer);
+  store.set(viewKey(boards.current), { zoom, x: Math.round(panX), y: Math.round(panY) });
+};
 const saveView = () => {
   clearTimeout(viewSaveTimer);
-  viewSaveTimer = setTimeout(() => store.set(VIEW_KEY, { zoom, x: Math.round(panX), y: Math.round(panY) }), 200);
+  viewSaveTimer = setTimeout(writeView, 200);
 };
 function applyView() {
   $("#board").style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
@@ -2244,6 +2286,142 @@ $("#clearBoard").addEventListener("click", () => {
 });
 $("#exportBoard").addEventListener("click", exportBoard);
 
+/* ---------- ボードの切り替え・作成・書き出し・読み込み ---------- */
+function renderBoardSelect() {
+  $("#boardSelect").replaceChildren(
+    ...boards.list.map((x) => el("option", { value: x.id, selected: x.id === boards.current }, `${x.name}（${x.count ?? 0}）`))
+  );
+}
+function switchBoard(id) {
+  if (id === boards.current || !boards.list.some((x) => x.id === id)) return renderBoardSelect();
+  writeView(); // 今のボードの表示位置を覚えてから切り替える
+  boards.current = id;
+  saveBoards();
+  board = loadBoard(id);
+  linking = false;
+  selected = null;
+  $("#linkMode").setAttribute("aria-pressed", "false");
+  $("#board").classList.remove("linking");
+  loadView(id);
+  applyView();
+  renderBoard();
+  renderBoardSelect();
+}
+// 新しいボードを一覧に足して、そちらに切り替える
+function addBoard(name, data = emptyBoard()) {
+  const id = uid();
+  const err = store.set(boardKey(id), data);
+  if (err) {
+    store.remove(boardKey(id));
+    toast(err.name === "QuotaExceededError" ? "保存容量がいっぱいで、ボードを増やせません。使わないボードを書き出してから削除してください" : "ボードを保存できませんでした");
+    return false;
+  }
+  boards.list.push({ id, name, count: data.cards.length });
+  saveBoards();
+  switchBoard(id);
+  return true;
+}
+// 同じ名前があれば (2) (3)… を付ける
+function uniqueName(name) {
+  const names = new Set(boards.list.map((x) => x.name));
+  if (!names.has(name)) return name;
+  for (let i = 2; ; i++) if (!names.has(`${name} (${i})`)) return `${name} (${i})`;
+}
+const askName = (message, value) => {
+  const v = prompt(message, value);
+  return v == null ? null : v.trim().slice(0, 40) || null;
+};
+
+$("#boardSelect").addEventListener("change", (e) => switchBoard(e.target.value));
+$("#boardNew").addEventListener("click", () => {
+  const name = askName("新しいボードの名前", uniqueName(`ボード ${boards.list.length + 1}`));
+  if (name && addBoard(uniqueName(name))) toast(`「${currentEntry().name}」を作りました`);
+});
+$("#boardRename").addEventListener("click", () => {
+  const entry = currentEntry();
+  const name = askName("ボードの名前", entry.name);
+  if (!name || name === entry.name) return;
+  entry.name = name;
+  saveBoards();
+  renderBoardSelect();
+});
+$("#boardDelete").addEventListener("click", () => {
+  const entry = currentEntry();
+  if (boards.list.length === 1) return toast("ボードが1つだけのときは削除できません（中身を消すときは「全部はがす」）");
+  const note = entry.count ? `カード ${entry.count} 枚も一緒に消えます。残したいときは先に「書き出す」してください。` : "";
+  if (!confirm(`「${entry.name}」を削除しますか？\n${note}`)) return;
+  const i = boards.list.indexOf(entry);
+  boards.list.splice(i, 1);
+  store.remove(boardKey(entry.id));
+  store.remove(viewKey(entry.id));
+  clearTimeout(viewSaveTimer); // 消したボードの表示位置は書かない
+  const next = boards.list[Math.min(i, boards.list.length - 1)];
+  boards.current = next.id;
+  saveBoards();
+  board = loadBoard(next.id);
+  loadView(next.id);
+  applyView();
+  renderBoard();
+  renderBoardSelect();
+  toast(`「${entry.name}」を削除しました`);
+});
+
+// 書き出し：ボード1つを .json に。読み込むと同じものが新しいボードとして戻る
+const BOARD_FILE = "charinco-board";
+const download = (name, text, type) => {
+  const a = el("a", { href: URL.createObjectURL(new Blob([text], { type })), download: name });
+  document.body.append(a);
+  a.click();
+  setTimeout(() => (URL.revokeObjectURL(a.href), a.remove()), 1000);
+};
+const fileSafe = (s) => s.replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 40);
+const today = () => new Date().toLocaleDateString("sv-SE"); // 2026-11-10
+$("#boardExport").addEventListener("click", () => {
+  const entry = currentEntry();
+  if (!board.cards.length) return toast("まだ何も貼られていません");
+  const data = { app: BOARD_FILE, version: 1, name: entry.name, exportedAt: new Date().toISOString(), cards: board.cards, links: board.links };
+  download(`${fileSafe(entry.name)}_${today()}.charinco.json`, JSON.stringify(data, null, 1), "application/json");
+  toast(`「${entry.name}」を書き出しました`);
+});
+$("#boardImport").addEventListener("click", () => $("#boardFile").click());
+$("#boardFile").addEventListener("change", async (e) => {
+  const file = e.target.files?.[0];
+  e.target.value = ""; // 同じファイルをもう一度選んでも読み込めるように
+  if (!file) return;
+  let data;
+  try {
+    data = readBoardFile(JSON.parse(await file.text()));
+  } catch (err) {
+    return toast(err instanceof SyntaxError ? "ファイルを読めませんでした（.json ではないようです）" : err.message);
+  }
+  if (addBoard(uniqueName(data.name), { cards: data.cards, links: data.links }))
+    toast(`「${currentEntry().name}」として読み込みました（カード ${data.cards.length} 枚）`);
+});
+// 読み込んだファイルを、ボードとして使える形に整える（手で書き換えたファイルや別の版でも壊れないように）。
+// カードの HTML は、表示するときに毎回サニタイズする
+function readBoardFile(data) {
+  if (data?.app !== BOARD_FILE || !Array.isArray(data.cards)) throw new Error("Charinco のボードのファイルではありません");
+  const num = (v, d) => (Number.isFinite(Number(v)) && v !== null && v !== "" ? Number(v) : d);
+  const ids = new Map(); // ファイル内の id → 新しい id（ほかのボードと重ならないよう振り直す）
+  const cards = [];
+  for (const c of data.cards) {
+    if (!c || typeof c !== "object" || !["clip", "note", "book"].includes(c.type)) continue;
+    const id = uid();
+    if (c.id != null) ids.set(String(c.id), id);
+    const card = { id, type: c.type, x: num(c.x, 0), y: num(c.y, 0), w: num(c.w, 280), h: num(c.h, null), rot: num(c.rot, 0) };
+    if (c.type === "note") card.text = String(c.text ?? "");
+    else card.html = String(c.html ?? "");
+    if (c.styled) card.styled = true;
+    if (c.src) card.src = { title: String(c.src.title ?? "").slice(0, 200), url: httpUrl(c.src.url) ?? "" };
+    if (c.comment) card.comment = String(c.comment).slice(0, 2000);
+    cards.push(card);
+  }
+  const links = (Array.isArray(data.links) ? data.links : [])
+    .map((l) => ({ a: ids.get(String(l?.a)), b: ids.get(String(l?.b)) }))
+    .filter((l) => l.a && l.b && l.a !== l.b);
+  return { name: String(data.name || "読み込んだボード").trim().slice(0, 40) || "読み込んだボード", cards, links };
+}
+
 function exportBoard() {
   if (!board.cards.length) return toast("まだ何も貼られていません");
   const nodes = $$(".card", $("#board"));
@@ -2274,14 +2452,11 @@ svg{position:absolute;inset:0;width:100%;height:100%;z-index:1}line{stroke:#b545
 .card:not(.styled) img{max-width:100%;height:auto}.card:not(.styled) p{margin:0 0 8px}.card:not(.styled) h1,.card:not(.styled) h2,.card:not(.styled) h3,.card:not(.styled) h4{font-size:16px;margin:0 0 6px}.card.styled{padding:22px 8px 8px}
 .src{display:block;margin-top:10px;padding-top:6px;border-top:1px solid #e4ddd0;font-size:10.5px;color:#6b6256}
 .comment{margin-top:10px;padding:6px 10px;border-left:3px solid #b5452f;background:#faf6ee;font-size:13px;line-height:1.6;white-space:pre-wrap;font-family:"Hiragino Sans",sans-serif;color:#2b2620}
-</style></head><body><header><b>Charinco Search</b> スクラップボード ／ ${new Date().toLocaleString("ja-JP")}${trail ? ` ／ 寄り道：${trail}` : ""}</header>
+</style></head><body><header><b>Charinco Search</b> スクラップボード「${escapeHtml(currentEntry().name)}」 ／ ${new Date().toLocaleString("ja-JP")}${trail ? ` ／ 寄り道：${trail}` : ""}</header>
 <div class="board"><svg><g transform="translate(${ox} ${oy})">${lines}</g></svg>
 ${cards}
 </div></body></html>`;
-  const a = el("a", { href: URL.createObjectURL(new Blob([html], { type: "text/html" })), download: `charinco-scrapboard-${Date.now()}.html` });
-  document.body.append(a);
-  a.click();
-  setTimeout(() => (URL.revokeObjectURL(a.href), a.remove()), 1000);
+  download(`${fileSafe(currentEntry().name)}_${today()}.html`, html, "text/html");
 }
 
 /* =========================================================
@@ -2342,4 +2517,5 @@ document.addEventListener("keydown", (e) => {
 renderPageTabs();
 history.replaceState(navState(), "");
 
+renderBoardSelect();
 renderBoard();
