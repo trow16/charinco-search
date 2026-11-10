@@ -1,5 +1,7 @@
 node_modules
 .env
+# 管理者の権限がない Mac 用に同梱する Node.js（大きいので GitHub には上げない）
+runtime/
 # 裏の Chrome のプロフィール（Cookie などが入る）
 profile/
 .DS_Store
