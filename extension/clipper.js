@@ -12,6 +12,8 @@
   root.innerHTML = `<style>
     :host { all: initial; }
     * { box-sizing: border-box; }
+    /* .bar { display: flex } などより優先して、hidden を付けたものは必ず隠す */
+    [hidden] { display: none !important; }
     .ui { font: 13px/1.5 "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif; color: #2b2622; }
     .bar { position: fixed; right: 18px; bottom: 18px; display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 14px;
       background: #f5efe4; border: 1px solid #d8cdbb; border-radius: 12px; box-shadow: 0 6px 24px rgba(0,0,0,.18); pointer-events: auto; }
