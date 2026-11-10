@@ -1,0 +1,7 @@
+node_modules
+.env
+.vercel
+# 裏の Chrome のプロフィール（Cookie などが入る）
+profile/
+.DS_Store
+.claude/

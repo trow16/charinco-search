@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Charinco 切り抜き",
+  "version": "0.1.0",
+  "description": "ふつうに見ているページの一部を、元の見た目のまま Charinco Search のスクラップボードに貼る",
+  "permissions": ["tabs", "scripting", "storage"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "このページで切り抜く（Charinco）" },
+  "commands": {
+    "toggle-clip": {
+      "suggested_key": { "default": "Alt+Shift+C" },
+      "description": "切り抜きモードの切り替え"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://localhost/*", "http://127.0.0.1/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "exclude_matches": ["http://localhost/*", "http://127.0.0.1/*"],
+      "js": ["clipcore.js", "clipper.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
