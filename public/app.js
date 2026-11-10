@@ -2284,7 +2284,6 @@ $("#clearBoard").addEventListener("click", () => {
   board = { cards: [], links: [] };
   renderBoard();
 });
-$("#exportBoard").addEventListener("click", exportBoard);
 
 /* ---------- ボードの切り替え・作成・書き出し・読み込み ---------- */
 // ボードのタブ：押すと切り替え、選んでいるタブをダブルクリックで名前を変える、× で削除
@@ -2465,42 +2464,6 @@ function readBoardFile(data) {
   return { name: String(data.name || "読み込んだボード").trim().slice(0, 40) || "読み込んだボード", cards, links };
 }
 
-function exportBoard() {
-  if (!board.cards.length) return toast("まだ何も貼られていません");
-  const nodes = $$(".card", $("#board"));
-  // 無限キャンバスなので座標は負にもなる。すべてのカードが収まるようにずらして書き出す
-  const ox = 60 - Math.min(...nodes.map((n) => n.offsetLeft));
-  const oy = 60 - Math.min(...nodes.map((n) => n.offsetTop));
-  const maxX = Math.max(...nodes.map((n) => n.offsetLeft + n.offsetWidth)) + ox + 60;
-  const maxY = Math.max(...nodes.map((n) => n.offsetTop + n.offsetHeight)) + oy + 60;
-  const cards = nodes
-    .map((n) => {
-      const c = board.cards.find((x) => x.id === n.dataset.id);
-      const inner = c.type === "note" ? escapeHtml(c.text || "").replace(/\n/g, "<br>") : c.styled ? cleanStyled(c.html || "") : clean(c.html || "");
-      const src = c.src ? `<a class="src" href="${escapeHtml(safeUrl(c.src.url))}">出典：${escapeHtml(c.src.title)}</a>` : "";
-      const comment = c.comment ? `<div class="comment">${escapeHtml(c.comment).replace(/\n/g, "<br>")}</div>` : "";
-      return `<div class="card ${c.type}${c.styled ? " styled" : ""}" style="left:${n.offsetLeft + ox}px;top:${n.offsetTop + oy}px;width:${n.offsetWidth}px;height:${n.offsetHeight}px;"><div class="content">${inner}</div>${comment}${src}</div>`;
-    })
-    .join("\n");
-  const lines = $("#strings").innerHTML;
-  const trail = state.trail.map((t) => escapeHtml(t.query)).join(" → ");
-  const html = `<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>Charinco Search スクラップボード</title>
-<style>
-body{margin:0;font-family:"Hiragino Sans",sans-serif;background:#f8f6f1;color:#2b2620}
-header{padding:12px 20px;background:#fff;border-bottom:1px solid #e4ddd0;font-size:13px;color:#6b6256}
-.board{position:relative;width:${maxX}px;height:${maxY}px;background-color:#f8f6f1;background-image:radial-gradient(rgba(43,38,32,.13) 1px,transparent 1.3px);background-size:24px 24px}
-svg{position:absolute;inset:0;width:100%;height:100%;z-index:1}line{stroke:#b5452f;stroke-width:1.5}
-.card{position:absolute;z-index:2;box-sizing:border-box;background:#fff;border:1px solid #e4ddd0;border-radius:6px;box-shadow:0 1px 2px rgba(43,38,32,.06);padding:22px 16px 12px;font-size:13px;line-height:1.6;overflow:auto}
-.card.note{background:#fff3b0;border-color:#e8d36a;font-size:15px;line-height:1.7}
-.card:not(.styled) img{max-width:100%;height:auto}.card:not(.styled) p{margin:0 0 8px}.card:not(.styled) h1,.card:not(.styled) h2,.card:not(.styled) h3,.card:not(.styled) h4{font-size:16px;margin:0 0 6px}.card.styled{padding:22px 8px 8px}
-.src{display:block;margin-top:10px;padding-top:6px;border-top:1px solid #e4ddd0;font-size:10.5px;color:#6b6256}
-.comment{margin-top:10px;padding:6px 10px;border-left:3px solid #b5452f;background:#faf6ee;font-size:13px;line-height:1.6;white-space:pre-wrap;font-family:"Hiragino Sans",sans-serif;color:#2b2620}
-</style></head><body><header><b>Charinco Search</b> スクラップボード「${escapeHtml(currentEntry().name)}」 ／ ${new Date().toLocaleString("ja-JP")}${trail ? ` ／ 寄り道：${trail}` : ""}</header>
-<div class="board"><svg><g transform="translate(${ox} ${oy})">${lines}</g></svg>
-${cards}
-</div></body></html>`;
-  download(`${fileSafe(currentEntry().name)}_${today()}.html`, html, "text/html");
-}
 
 /* =========================================================
    画面切り替え・その他
