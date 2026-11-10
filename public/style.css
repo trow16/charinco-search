@@ -382,6 +382,7 @@ main { padding: 0 0 60px; }
 .board-tools { display: flex; gap: 8px; padding: 14px 28px; align-items: center; }
 .board-tools button { border: 1px solid var(--card-line); background: #fff; border-radius: 6px; padding: 5px 12px; font-size: 13px; color: var(--ink); }
 .board-tools button:hover { border-color: var(--ink-2); }
+.board-tools button:disabled { opacity: .4; cursor: default; border-color: var(--card-line); }
 .board-tools button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
 .board-tools .danger { color: var(--ink-2); }
 .board-tools .spacer { flex: 1; }

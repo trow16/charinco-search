@@ -1853,8 +1853,9 @@ const saveBoards = () => store.set(BOARDS_KEY, boards);
 const currentEntry = () => boards.list.find((x) => x.id === boards.current);
 
 let boards = store.getJSON(BOARDS_KEY);
-if (!Array.isArray(boards?.list) || !boards.list.length) {
-  // 前の版（ボードが1つだけ）から引き継ぐ
+// ボードは0枚でもよい（全部削除したら、読み込み直しても0枚のまま）。一覧がまだないときだけ「ボード 1」を作る
+if (!Array.isArray(boards?.list)) {
+  // 初めて開いたとき。前の版（ボードが1つだけ）があれば引き継ぐ
   const id = uid();
   const old = store.getJSON("charinco.board.v1");
   const first = Array.isArray(old?.cards) ? old : emptyBoard();
@@ -1871,11 +1872,11 @@ if (!Array.isArray(boards?.list) || !boards.list.length) {
     for (const k of ["charinco.board.v1", "charinco-view", "charinco-zoom"]) store.remove(k);
   }
 }
-if (!currentEntry()) boards.current = boards.list[0].id;
-let board = loadBoard(boards.current);
+if (!currentEntry()) boards.current = boards.list[0]?.id ?? null; // null：ボードが1つもない
+let board = boards.current ? loadBoard(boards.current) : emptyBoard();
 
 const save = () => {
-  if (store.set(boardKey(boards.current), board)?.name === "QuotaExceededError")
+  if (boards.current && store.set(boardKey(boards.current), board)?.name === "QuotaExceededError")
     toast("保存容量がいっぱいです。いくつかカードをはがすか、使わないボードを「書き出す」してから削除してください");
   const entry = currentEntry();
   if (entry && entry.count !== board.cards.length) {
@@ -1884,10 +1885,21 @@ const save = () => {
     renderBoardTabs();
   }
   $("#boardCount").textContent = board.cards.length;
-  $("#boardEmpty").hidden = board.cards.length > 0;
+  showBoardEmpty();
 };
+// カードがないときの案内。ボード自体がないときは作り方を案内し、ボードがないと使えないボタンを止める
+const EMPTY_TEXT = $("#boardEmpty").textContent;
+const NO_BOARD_TEXT = "ボードがありません。上の ＋ で新しいボードを作るか、「読み込む」で書き出したファイルから戻せます（切り抜いて貼ると、ボードが自動でできます）。";
+function showBoardEmpty() {
+  const none = !boards.current;
+  $("#boardEmpty").hidden = board.cards.length > 0;
+  $("#boardEmpty").textContent = none ? NO_BOARD_TEXT : EMPTY_TEXT;
+  for (const id of ["#linkMode", "#boardExport", "#clearBoard"]) $(id).disabled = none;
+}
 
 function addCard(card) {
+  // ボードが1つもなければ、ここで作ってから貼る（切り抜いたものをなくさないように）
+  if (!boards.current && !addBoard(uniqueName("ボード 1"))) return null;
   const scroll = $("#boardScroll");
   const n = board.cards.length;
   // 画面に見えている範囲の近くに、少しずつずらして貼る
@@ -2055,7 +2067,7 @@ const clampZoom = (z) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
 let zoom = 1, panX = 0, panY = 0;
 // ボードごとに、最後に見ていた倍率と位置を覚えておく
 function loadView(id) {
-  const v = store.getJSON(viewKey(id));
+  const v = id ? store.getJSON(viewKey(id)) : null;
   zoom = clampZoom(Number(v?.zoom) || 1);
   panX = Number(v?.x) || 0;
   panY = Number(v?.y) || 0;
@@ -2064,7 +2076,7 @@ loadView(boards.current);
 let viewSaveTimer = 0;
 const writeView = () => {
   clearTimeout(viewSaveTimer);
-  store.set(viewKey(boards.current), { zoom, x: Math.round(panX), y: Math.round(panY) });
+  if (boards.current) store.set(viewKey(boards.current), { zoom, x: Math.round(panX), y: Math.round(panY) });
 };
 const saveView = () => {
   clearTimeout(viewSaveTimer);
@@ -2269,7 +2281,7 @@ function drawStrings() {
 
 $("#addNote").addEventListener("click", () => {
   const card = addCard({ type: "note", text: "" });
-  $(`.card[data-id="${card.id}"] .content`)?.focus();
+  if (card) $(`.card[data-id="${card.id}"] .content`)?.focus();
 });
 $("#linkMode").addEventListener("click", (e) => {
   linking = !linking;
@@ -2317,9 +2329,14 @@ function switchBoard(id) {
   // 今のタブを押しても描き直さない（描き直すとダブルクリックの2回目が届かない）
   if (id === boards.current || !boards.list.some((x) => x.id === id)) return;
   writeView(); // 今のボードの表示位置を覚えてから切り替える
-  boards.current = id;
+  showBoard(id);
   saveBoards();
-  board = loadBoard(id);
+  renderBoardTabs();
+}
+// id のボードを読み込んで表示する（null ならボードなし）
+function showBoard(id) {
+  boards.current = id;
+  board = id ? loadBoard(id) : emptyBoard();
   linking = false;
   selected = null;
   $("#linkMode").setAttribute("aria-pressed", "false");
@@ -2327,7 +2344,6 @@ function switchBoard(id) {
   loadView(id);
   applyView();
   renderBoard();
-  renderBoardTabs();
 }
 // 新しいボードを一覧に足して、そちらに切り替える
 function addBoard(name, data = emptyBoard()) {
@@ -2386,22 +2402,16 @@ function renameBoard(id) {
 function deleteBoard(id) {
   const entry = boards.list.find((x) => x.id === id);
   if (!entry) return;
-  if (boards.list.length === 1) return toast("ボードが1つだけのときは削除できません（中身を消すときは「全部はがす」）");
   const note = entry.count ? `カード ${entry.count} 枚も一緒に消えます。残したいときは先に「書き出す」してください。` : "";
   if (!confirm(`「${entry.name}」を削除しますか？\n${note}`)) return;
   const i = boards.list.indexOf(entry);
   boards.list.splice(i, 1);
   store.remove(boardKey(id));
   store.remove(viewKey(id));
-  // 見ているボードを消したら隣のボードへ（消したボードの表示位置は書かない）
+  // 見ているボードを消したら隣のボードへ。最後の1つなら、ボードなしになる（消したボードの表示位置は書かない）
   if (id === boards.current) {
     clearTimeout(viewSaveTimer);
-    const next = boards.list[Math.min(i, boards.list.length - 1)];
-    boards.current = next.id;
-    board = loadBoard(next.id);
-    loadView(next.id);
-    applyView();
-    renderBoard();
+    showBoard(boards.list[Math.min(i, boards.list.length - 1)]?.id ?? null);
   }
   saveBoards();
   renderBoardTabs();
@@ -2420,7 +2430,7 @@ const fileSafe = (s) => s.replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 40);
 const today = () => new Date().toLocaleDateString("sv-SE"); // 2026-11-10
 $("#boardExport").addEventListener("click", () => {
   const entry = currentEntry();
-  if (!board.cards.length) return toast("まだ何も貼られていません");
+  if (!entry || !board.cards.length) return toast("まだ何も貼られていません");
   const data = { app: BOARD_FILE, version: 1, name: entry.name, exportedAt: new Date().toISOString(), cards: board.cards, links: board.links };
   download(`${fileSafe(entry.name)}_${today()}.charinco.json`, JSON.stringify(data, null, 1), "application/json");
   toast(`「${entry.name}」を書き出しました`);
