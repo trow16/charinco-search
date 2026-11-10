@@ -636,7 +636,8 @@ const PURIFY = {
   FORBID_TAGS: ["style", "form", "input", "button", "textarea", "select", "iframe", "object", "embed", "video", "audio", "svg", "math"],
   FORBID_ATTR: ["style", "class", "id", "width", "height"],
 };
-DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+// リンクは別のタブで開き、画像は参照元を送らず遅延読み込みにする（元の見た目のカードも同じ）
+const outward = (node) => {
   if (node.tagName === "A") {
     node.setAttribute("target", "_blank");
     node.setAttribute("rel", "noopener noreferrer");
@@ -645,7 +646,8 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
     node.setAttribute("referrerpolicy", "no-referrer");
     node.setAttribute("loading", "lazy");
   }
-});
+};
+DOMPurify.addHook("afterSanitizeAttributes", outward);
 const clean = (html) => DOMPurify.sanitize(html, PURIFY);
 
 function extractBlocks(html, baseUrl) {
@@ -691,16 +693,18 @@ const PURIFY_STYLED = {
   FORBID_TAGS: ["style", "link", "form", "input", "button", "textarea", "select", "iframe", "object", "embed", "video", "audio", "math", "foreignObject"],
   FORBID_ATTR: ["class", "id"],
 };
-const cleanStyled = (html) => {
-  const out = DOMPurify.sanitize(html, { ...PURIFY_STYLED, RETURN_DOM_FRAGMENT: true });
-  // ボードの外にはみ出す配置は無効にする
-  for (const n of out.querySelectorAll("[style]")) {
-    for (const p of ["position", "z-index", "top", "left", "right", "bottom", "inset"]) n.style.removeProperty(p);
-  }
-  const box = document.createElement("div");
-  box.append(out);
-  return box.innerHTML;
-};
+// ボードの外にはみ出す配置は、サニタイズしながら無効にする（このカード専用の DOMPurify にだけフックを付ける）。
+// DOM で受け取って後から消すより速い。style を CSS として読むのは、配置の指定がありそうなものだけ
+// （\ や /* があるものは、エスケープ・コメントで書いた指定かもしれないので必ず読む）
+const POSITION_PROPS = ["position", "z-index", "top", "left", "right", "bottom", "inset"];
+const MAY_POSITION = /\\|\/\*|(?:^|;)\s*(?:position|z-index|top|left|right|bottom|inset)\s*:/i;
+const purifyStyled = DOMPurify(window);
+purifyStyled.addHook("afterSanitizeAttributes", (n) => {
+  outward(n);
+  const st = n.getAttribute?.("style");
+  if (st && MAY_POSITION.test(st)) for (const p of POSITION_PROPS) n.style.removeProperty(p);
+});
+const cleanStyled = (html) => purifyStyled.sanitize(html, PURIFY_STYLED);
 
 const HL = "charinco-hl";
 const HINT_CLIP = "切り抜きたい部分をクリック／ドラッグで範囲を囲んで切り抜く";
@@ -1454,11 +1458,22 @@ async function renderLive(b, token, onFail) {
   };
 
   // ---- 画面を受け取る ----
+  // 前の1枚を描き終える前に次が届いたら、間の画面はとばして最新の1枚だけ描く
+  let nextFrame = null;
+  let painting = false;
+  const paint = () => {
+    painting = !!nextFrame && alive;
+    if (!painting) return;
+    img.src = `data:image/jpeg;base64,${nextFrame}`;
+    nextFrame = null;
+    img.decode().then(paint, paint);
+  };
   const es = new EventSource(`/api/live?id=${encodeURIComponent(id)}&code=${encodeURIComponent(getCode())}`);
   es.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
     if (m.t === "frame") {
-      img.src = `data:image/jpeg;base64,${m.data}`;
+      nextFrame = m.data;
+      if (!painting) paint();
       loading.hidden = true;
     } else if (m.t === "nav") {
       cur = { url: m.url, title: m.title || cur.title };
@@ -1844,10 +1859,22 @@ const uid = () => Math.random().toString(36).slice(2, 10);
 const BOARDS_KEY = "charinco.boards.v1";
 const boardKey = (id) => `charinco.board.${id}`;
 const viewKey = (id) => `charinco.view.${id}`;
-const emptyBoard = () => ({ cards: [], links: [] });
+// 保存するカードの HTML はサニタイズ済みにしておく（貼るとき・ファイルから読み込むときにサニタイズする）。
+// 描くたびにサニタイズし直すと、切り抜きの多いボードでは開くのに数秒かかるため。
+// sanitized の印がないボード（前の版で保存したもの）は、読み込んだときに一度だけサニタイズする
+const sanitizeCard = (c) => {
+  if (c.type !== "note") c.html = c.styled ? cleanStyled(String(c.html ?? "")) : clean(String(c.html ?? ""));
+};
+const emptyBoard = () => ({ cards: [], links: [], sanitized: true });
 const loadBoard = (id) => {
   const b = store.getJSON(boardKey(id));
-  return Array.isArray(b?.cards) ? { cards: b.cards, links: Array.isArray(b.links) ? b.links : [] } : emptyBoard();
+  if (!Array.isArray(b?.cards)) return emptyBoard();
+  const out = { cards: b.cards.filter((c) => c && typeof c === "object"), links: Array.isArray(b.links) ? b.links : [], sanitized: true };
+  if (b.sanitized !== true) {
+    out.cards.forEach(sanitizeCard);
+    store.set(boardKey(id), out);
+  }
+  return out;
 };
 const saveBoards = () => store.set(BOARDS_KEY, boards);
 const currentEntry = () => boards.list.find((x) => x.id === boards.current);
@@ -1875,9 +1902,26 @@ if (!Array.isArray(boards?.list)) {
 if (!currentEntry()) boards.current = boards.list[0]?.id ?? null; // null：ボードが1つもない
 let board = boards.current ? loadBoard(boards.current) : emptyBoard();
 
-const save = () => {
-  if (boards.current && store.set(boardKey(boards.current), board)?.name === "QuotaExceededError")
+// 保存：枚数やタブの表示はすぐ直し、localStorage への書き込みは少しまとめてから行う。
+// ボードは数MBになることがあり、1文字打つたびに全体を書き直すと入力が重くなるため
+const SAVE_DELAY = 400;
+let saveTimer = 0;
+function writeBoard() {
+  clearTimeout(saveTimer);
+  saveTimer = 0;
+  if (!currentEntry()) return; // 書き込む前に削除したボードは書かない
+  if (store.set(boardKey(boards.current), board)?.name === "QuotaExceededError")
     toast("保存容量がいっぱいです。いくつかカードをはがすか、使わないボードを「書き出す」してから削除してください");
+}
+// まだ書いていない変更があれば、今すぐ書く（ボードを切り替える前・ページを閉じるとき）
+const flushBoard = () => saveTimer && writeBoard();
+addEventListener("pagehide", () => (flushBoard(), writeView()));
+document.addEventListener("visibilitychange", () => document.hidden && (flushBoard(), writeView()));
+const save = () => {
+  if (boards.current && !saveTimer) saveTimer = setTimeout(writeBoard, SAVE_DELAY);
+  updateBoardInfo();
+};
+function updateBoardInfo() {
   const entry = currentEntry();
   if (entry && entry.count !== board.cards.length) {
     entry.count = board.cards.length;
@@ -1886,14 +1930,16 @@ const save = () => {
   }
   $("#boardCount").textContent = board.cards.length;
   showBoardEmpty();
-};
+}
 // カードがないときの案内。ボード自体がないときは作り方を案内し、ボードがないと使えないボタンを止める
 const EMPTY_TEXT = $("#boardEmpty").textContent;
 const NO_BOARD_TEXT = "ボードがありません。上の ＋ で新しいボードを作るか、「読み込む」で書き出したファイルから戻せます（切り抜いて貼ると、ボードが自動でできます）。";
 function showBoardEmpty() {
   const none = !boards.current;
-  $("#boardEmpty").hidden = board.cards.length > 0;
-  $("#boardEmpty").textContent = none ? NO_BOARD_TEXT : EMPTY_TEXT;
+  const empty = $("#boardEmpty");
+  const text = none ? NO_BOARD_TEXT : EMPTY_TEXT;
+  empty.hidden = board.cards.length > 0;
+  if (empty.textContent !== text) empty.textContent = text;
   for (const id of ["#linkMode", "#boardExport", "#clearBoard"]) $(id).disabled = none;
 }
 
@@ -1916,8 +1962,9 @@ function addCard(card) {
     ...card,
   };
   board.cards.push(card);
+  // 足した1枚だけ描き、つかんで上げたカードよりも上に重ねる（全部描き直すと、切り抜きの多いボードでは1秒近くかかる）
+  if (boardDrawn) appendCard(card).style.zIndex = String(++topZ);
   save();
-  renderBoard();
   return card;
 }
 
@@ -2009,54 +2056,65 @@ function commentBox(card) {
   return wrap;
 }
 
-function renderBoard() {
-  const b = $("#board");
-  ro.disconnect();
-  $$(".card", b).forEach((n) => n.remove());
-  for (const card of board.cards) {
-    const content = el("div", { class: "content" });
-    if (card.type === "note") {
-      content.contentEditable = "true";
-      content.dataset.placeholder = "メモを書く…";
-      content.setAttribute("aria-label", "付箋");
-      content.textContent = card.text || "";
-      content.addEventListener("input", () => {
-        card.text = content.innerText;
-        save();
-      });
-      content.addEventListener("pointerdown", (e) => linking && e.preventDefault());
-    } else {
-      content.innerHTML = card.styled ? cleanStyled(card.html || "") : clean(card.html || "");
-    }
-    const node = el(
-      "div",
-      {
-        class: `card ${card.type}${card.styled ? " styled" : ""}${selected === card.id ? " selected" : ""}`,
-        "data-id": card.id,
-        style: `left:${card.x}px;top:${card.y}px;width:${card.w}px;${card.h ? `height:${card.h}px;` : ""}--rot:${card.rot}deg`,
-      },
-      el("span", { class: "grip", title: "ドラッグで動かす" }),
-      el("button", { class: "del", title: "はがす", onclick: () => removeCard(card.id) }, "×"),
-      content,
-      card.type === "note" ? null : commentBox(card),
-      card.src ? el("a", { class: "src", href: safeUrl(card.src.url), target: "_blank", rel: "noopener noreferrer" }, `出典：${card.src.title}`) : null
-    );
-    node.addEventListener("pointerdown", (e) => startDrag(e, card, node));
-    node.addEventListener("click", (e) => linking && pickForLink(e, card));
-    // 付箋は持ち手と×以外のどこを押しても書ける（文字の外を押したら末尾から続けて書く）
-    if (card.type === "note")
-      node.addEventListener("click", (e) => {
-        if (linking || e.target.closest(".grip,.del") || content.contains(e.target)) return;
-        content.focus();
-        const sel = getSelection();
-        sel.selectAllChildren(content);
-        sel.collapseToEnd();
-      });
-    b.append(node);
-    ro.observe(node);
+function cardNode(card) {
+  const content = el("div", { class: "content" });
+  if (card.type === "note") {
+    content.contentEditable = "true";
+    content.dataset.placeholder = "メモを書く…";
+    content.setAttribute("aria-label", "付箋");
+    content.textContent = card.text || "";
+    content.addEventListener("input", () => {
+      card.text = content.innerText;
+      save();
+    });
+    content.addEventListener("pointerdown", (e) => linking && e.preventDefault());
+  } else {
+    content.innerHTML = card.html || ""; // 保存するときにサニタイズ済み（loadBoard）
   }
+  const node = el(
+    "div",
+    {
+      class: `card ${card.type}${card.styled ? " styled" : ""}${selected === card.id ? " selected" : ""}`,
+      "data-id": card.id,
+      style: `left:${card.x}px;top:${card.y}px;width:${card.w}px;${card.h ? `height:${card.h}px;` : ""}--rot:${card.rot}deg`,
+    },
+    el("span", { class: "grip", title: "ドラッグで動かす" }),
+    el("button", { class: "del", title: "はがす", onclick: () => removeCard(card.id) }, "×"),
+    content,
+    card.type === "note" ? null : commentBox(card),
+    card.src ? el("a", { class: "src", href: safeUrl(card.src.url), target: "_blank", rel: "noopener noreferrer" }, `出典：${card.src.title}`) : null
+  );
+  node.addEventListener("pointerdown", (e) => startDrag(e, card, node));
+  node.addEventListener("click", (e) => linking && pickForLink(e, card));
+  // 付箋は持ち手と×以外のどこを押しても書ける（文字の外を押したら末尾から続けて書く）
+  if (card.type === "note")
+    node.addEventListener("click", (e) => {
+      if (linking || e.target.closest(".grip,.del") || content.contains(e.target)) return;
+      content.focus();
+      const sel = getSelection();
+      sel.selectAllChildren(content);
+      sel.collapseToEnd();
+    });
+  return node;
+}
+function appendCard(card) {
+  const node = cardNode(card);
+  $("#board").append(node);
+  ro.observe(node);
+  return node;
+}
+// ボード全体を描く。切り抜きの多いボードは描くのに時間がかかるので、
+// 起動時には描かず、ボードの画面を初めて開いたときに描く
+let boardDrawn = false;
+let topZ = 2; // 触ったカードを上げる z-index（.card は 2）
+function renderBoard() {
+  ro.disconnect();
+  topZ = 2;
+  $$(".card", $("#board")).forEach((n) => n.remove());
+  board.cards.forEach(appendCard);
+  boardDrawn = true;
   drawStrings();
-  save();
+  updateBoardInfo();
 }
 
 /* ---------- ボードの拡大縮小・移動（無限キャンバス） ---------- */
@@ -2210,7 +2268,9 @@ function startDrag(e, card, node) {
   if (!e.target.closest(".grip,.pin")) return;
   e.preventDefault();
   const sx = e.clientX, sy = e.clientY, ox = card.x, oy = card.y;
-  node.style.zIndex = 4;
+  // 最後に触ったカードを最前面に。DOM の並びは変えず z-index で上げる
+  // （大きな切り抜きを DOM の末尾へ付け替えると、中身のスタイルを全部計算し直して重い）
+  node.style.zIndex = String(++topZ);
   node.setPointerCapture(e.pointerId);
   const move = (ev) => {
     // 拡大縮小しているときは、画面上の移動量をボード上の移動量に直す
@@ -2218,16 +2278,15 @@ function startDrag(e, card, node) {
     card.y = Math.round(oy + (ev.clientY - sy) / zoom);
     node.style.left = `${card.x}px`;
     node.style.top = `${card.y}px`;
-    drawStrings();
+    drawStringsSoon();
   };
   const up = () => {
     node.removeEventListener("pointermove", move);
     node.removeEventListener("pointerup", up);
-    node.style.zIndex = "";
-    // 最後に触ったカードを最前面に
+    if (card.x === ox && card.y === oy && board.cards.at(-1) === card) return;
+    // 保存する並び順も最前面に（次に開いたときは、この順に重なる）
     board.cards = [...board.cards.filter((c) => c !== card), card];
     save();
-    $("#board").append(node);
   };
   node.addEventListener("pointermove", move);
   node.addEventListener("pointerup", up);
@@ -2236,7 +2295,11 @@ function startDrag(e, card, node) {
 function removeCard(id) {
   board.cards = board.cards.filter((c) => c.id !== id);
   board.links = board.links.filter((l) => l.a !== id && l.b !== id);
-  renderBoard();
+  if (selected === id) selected = null;
+  const node = $(`#board .card[data-id="${id}"]`);
+  if (node) (ro.unobserve(node), node.remove());
+  drawStrings();
+  save();
 }
 
 function pickForLink(e, card) {
@@ -2257,6 +2320,7 @@ function pickForLink(e, card) {
 // 糸はカードの中心同士を結ぶ。SVGはカードより下の層にあるので、どのカードの上にも重ならない
 function drawStrings() {
   const svg = $("#strings");
+  if (!board.links.length) return svg.firstChild && svg.replaceChildren();
   const SVG = "http://www.w3.org/2000/svg";
   const centers = {};
   for (const n of $$(".card", $("#board"))) {
@@ -2278,6 +2342,13 @@ function drawStrings() {
   }
   svg.replaceChildren(...els);
 }
+// ドラッグ中は1コマに1回だけ描く
+let stringsFrame = 0;
+const drawStringsSoon = () =>
+  (stringsFrame ||= requestAnimationFrame(() => {
+    stringsFrame = 0;
+    drawStrings();
+  }));
 
 $("#addNote").addEventListener("click", () => {
   const card = addCard({ type: "note", text: "" });
@@ -2293,8 +2364,9 @@ $("#linkMode").addEventListener("click", (e) => {
 });
 $("#clearBoard").addEventListener("click", () => {
   if (!board.cards.length || !confirm("ボードのカードをすべてはがしますか？")) return;
-  board = { cards: [], links: [] };
+  board = emptyBoard();
   renderBoard();
+  save();
 });
 
 /* ---------- ボードの切り替え・作成・書き出し・読み込み ---------- */
@@ -2335,6 +2407,7 @@ function switchBoard(id) {
 }
 // id のボードを読み込んで表示する（null ならボードなし）
 function showBoard(id) {
+  flushBoard(); // 今のボードの書きかけを先に保存する
   boards.current = id;
   board = id ? loadBoard(id) : emptyBoard();
   linking = false;
@@ -2446,11 +2519,11 @@ $("#boardFile").addEventListener("change", async (e) => {
   } catch (err) {
     return toast(err instanceof SyntaxError ? "ファイルを読めませんでした（.json ではないようです）" : err.message);
   }
-  if (addBoard(uniqueName(data.name), { cards: data.cards, links: data.links }))
+  if (addBoard(uniqueName(data.name), { cards: data.cards, links: data.links, sanitized: true }))
     toast(`「${currentEntry().name}」として読み込みました（カード ${data.cards.length} 枚）`);
 });
 // 読み込んだファイルを、ボードとして使える形に整える（手で書き換えたファイルや別の版でも壊れないように）。
-// カードの HTML は、表示するときに毎回サニタイズする
+// カードの HTML はここでサニタイズする
 function readBoardFile(data) {
   if (data?.app !== BOARD_FILE || !Array.isArray(data.cards)) throw new Error("Charinco のボードのファイルではありません");
   const num = (v, d) => (Number.isFinite(Number(v)) && v !== null && v !== "" ? Number(v) : d);
@@ -2466,6 +2539,7 @@ function readBoardFile(data) {
     if (c.styled) card.styled = true;
     if (c.src) card.src = { title: String(c.src.title ?? "").slice(0, 200), url: httpUrl(c.src.url) ?? "" };
     if (c.comment) card.comment = String(c.comment).slice(0, 2000);
+    sanitizeCard(card);
     cards.push(card);
   }
   const links = (Array.isArray(data.links) ? data.links : [])
@@ -2484,7 +2558,7 @@ function showView(name, { keepScroll = false } = {}) {
   $("#view-board").hidden = name !== "board";
   updateTabs();
   if (changed && !keepScroll) window.scrollTo(0, 0);
-  if (name === "board") drawStrings();
+  if (name === "board") boardDrawn ? drawStrings() : renderBoard();
   return changed;
 }
 $$(".tabs button[data-view]").forEach((b) =>
@@ -2534,4 +2608,4 @@ renderPageTabs();
 history.replaceState(navState(), "");
 
 renderBoardTabs();
-renderBoard();
+updateBoardInfo(); // ボード自体は、ボードの画面を開いたときに描く
