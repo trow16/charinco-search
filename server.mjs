@@ -6,7 +6,23 @@ import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+
+// .env（APIキー）を読む。node の --env-file 系の指定は Node.js のバージョンによって使えず、
+// 古い Node.js の Mac ではサーバーが起動しなくなるので、自分で読む（すでにある環境変数は上書きしない）
+try {
+  for (const line of (await fs.readFile(path.join(here, ".env"), "utf8")).split(/\r?\n/)) {
+    const m = line.match(/^\s*(?:export\s+)?([A-Za-z_]\w*)\s*=\s*(.*?)\s*$/);
+    if (!m || m[1] in process.env) continue;
+    const q = m[2].match(/^(["'])(.*)\1$/);
+    process.env[m[1]] = q ? q[2] : m[2].replace(/\s+#.*$/, "");
+  }
+} catch {}
+
 const PORT = Number(process.env.PORT || 3000);
+
+// 止める合図（起動したウィンドウを閉じた・Ctrl+C）で必ず終わる。裏の Chrome を動かす puppeteer は、
+// この合図では Chrome を閉じるだけでサーバーを残してしまうため。終わるときに Chrome も閉じる（puppeteer が exit で閉じる）
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, () => process.exit(0));
 const TYPES = { ".html": "text/html; charset=utf-8", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon" };
 
 // 拡張機能（extension/）にも同じ切り抜きの中核を入れておく

@@ -5,7 +5,7 @@
   "type": "module",
   "description": "創造的になるための検索エンジン — 仮想図書館ビュー / 平行サジェスチョン / HTMLスクラップボード",
   "scripts": {
-    "dev": "node --env-file-if-exists=.env server.mjs",
+    "dev": "node server.mjs",
     "mock": "CHARINCO_MOCK=1 node server.mjs"
   },
   "engines": {
