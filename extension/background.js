@@ -1,6 +1,19 @@
 // 拡張機能の裏方：Charinco から開いたタブを覚え、切り抜きを Charinco のタブへ届ける
 
 const APP_URLS = ["http://localhost/*", "http://127.0.0.1/*"];
+const isApp = (url) => /^http:\/\/(localhost|127\.0\.0\.1)([:/]|$)/.test(url || "");
+
+// 切り抜きのツールバーは、どのページにも入れておくのではなく、使うタブにだけ入れる（ふだん見るページを重くしない）。
+// 入れるのは、Charinco から開いたタブ（リンクで別のページへ移っても入れ直す）と、アイコン・ショートカットを押したタブ
+const injectClipper = (tabId) => chrome.scripting.executeScript({ target: { tabId }, files: ["clipcore.js", "clipper.js"] });
+chrome.webNavigation.onDOMContentLoaded.addListener(
+  async ({ tabId, frameId, url }) => {
+    if (frameId !== 0 || isApp(url) || !(tabId in (await clipTabs()))) return;
+    // ツールバーは読み込まれると「hello」を送り、Charinco から開いたタブなら最初から出る
+    await injectClipper(tabId).catch(() => {});
+  },
+  { url: [{ schemes: ["http", "https"] }] }
+);
 
 // Charinco から開いたタブ（ツールバーを最初から出す）。サービスワーカーが止まっても消えないよう session に置く
 async function clipTabs() {
@@ -98,12 +111,12 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
 
 // ツールバーのアイコン・ショートカット：そのタブで切り抜きを始める
 async function toggle(tab) {
-  if (!tab?.id || !/^https?:/.test(tab.url || "")) return;
+  if (!tab?.id || !/^https?:/.test(tab.url || "") || isApp(tab.url)) return;
   try {
     await chrome.tabs.sendMessage(tab.id, { type: "toggle" });
   } catch {
-    // 拡張機能を入れる前から開いていたページには、ここで読み込ませる
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["clipcore.js", "clipper.js"] });
+    // まだツールバーを入れていないページには、ここで入れる
+    await injectClipper(tab.id);
     await chrome.tabs.sendMessage(tab.id, { type: "toggle" }).catch(() => {});
   }
 }
