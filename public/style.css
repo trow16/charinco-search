@@ -386,12 +386,25 @@ main { padding: 0 0 60px; }
 .board-tools .danger { color: var(--ink-2); }
 .board-tools .spacer { flex: 1; }
 .board-tools { flex-wrap: wrap; }
-.board-tools .boards { display: flex; align-items: center; gap: 6px; }
-.board-tools .sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; }
-#boardSelect { max-width: 260px; padding: 5px 8px; border: 1px solid var(--card-line); border-radius: 6px; background: #fff; font: inherit; font-size: 13px; font-weight: 700; color: var(--ink); cursor: pointer; }
+/* ボードのタブ：選んでいるタブはボードの地色とつながって見える */
+.board-tabs { display: flex; align-items: flex-end; gap: 2px; padding: 0 28px; border-bottom: 1px solid var(--line); }
+.board-tab-list { display: flex; align-items: flex-end; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+.board-tab { display: flex; align-items: center; flex: 0 0 auto; max-width: 240px; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--ink-2); }
+.board-tab:hover { background: var(--paper-2); }
+.board-tab[aria-current="true"] { background: var(--board); border-color: var(--line); color: var(--ink); margin-bottom: -1px; padding-bottom: 1px; }
+.board-tab-open { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 7px 4px 7px 14px; border: 0; background: none; color: inherit; font: inherit; font-size: 13px; cursor: pointer; }
+.board-tab[aria-current="true"] .board-tab-open { font-weight: 700; cursor: text; }
+.board-tab-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.board-tab .count { flex-shrink: 0; font-size: 11px; min-width: 18px; }
+.board-tab:not([aria-current="true"]) .count, .board-tab .count.zero { background: var(--line); color: var(--ink-2); }
+.board-tab-close { flex-shrink: 0; width: 22px; height: 22px; margin-right: 6px; border: 0; border-radius: 4px; background: none; color: var(--ink-2); font-size: 14px; line-height: 1; cursor: pointer; opacity: 0; }
+.board-tab:hover .board-tab-close, .board-tab[aria-current="true"] .board-tab-close, .board-tab-close:focus-visible { opacity: 1; }
+.board-tab-close:hover { background: var(--paper-2); color: var(--accent); }
+.board-tab-new { flex-shrink: 0; width: 30px; height: 30px; margin: 0 0 3px 4px; border: 0; border-radius: 6px; background: none; color: var(--ink-2); font-size: 18px; line-height: 1; cursor: pointer; }
+.board-tab-new:hover { background: var(--paper-2); color: var(--ink); }
 /* 無限キャンバス：表示域は固定し、中のボードを transform で動かす。点の背景は表示域に描いてボードと一緒に動かす */
 .board-scroll {
-  position: relative; overflow: hidden; height: calc(100vh - 150px); border-top: 1px solid var(--line);
+  position: relative; overflow: hidden; height: calc(100vh - 186px);
   cursor: grab; touch-action: none;
   background-color: var(--board);
   background-image: radial-gradient(rgba(43,38,32,.13) 1px, transparent 1.3px);
@@ -479,7 +492,7 @@ main { padding: 0 0 60px; }
   .top { flex-wrap: wrap; gap: 10px 14px; padding: 10px 16px; }
   .search { order: 3; flex-basis: 100%; }
   .tabs { margin-left: auto; }
-  .trail, .legend, .shelf-nav, .hall, .shifts, .hint, .board-tools { padding-left: 16px; padding-right: 16px; }
+  .trail, .legend, .shelf-nav, .hall, .shifts, .hint, .board-tools, .board-tabs { padding-left: 16px; padding-right: 16px; }
   .hall-arrow { width: 34px; height: 56px; font-size: 26px; }
   .lead { font-size: 20px; }
   .tier { height: 190px; }

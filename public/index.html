@@ -80,14 +80,6 @@
     <!-- HTMLスクラップボード -->
     <section class="view" id="view-board" hidden>
       <div class="board-tools">
-        <!-- ボードの切り替え・作成 -->
-        <div class="boards" role="group" aria-label="ボード">
-          <select id="boardSelect" aria-label="表示するボード"></select>
-          <button id="boardNew" title="空のボードを新しく作る">＋ 新しいボード</button>
-          <button id="boardRename" title="このボードの名前を変える">名前を変える</button>
-          <button id="boardDelete" class="danger" title="このボードを削除する">削除</button>
-        </div>
-        <span class="sep" aria-hidden="true"></span>
         <button id="addNote">付箋を貼る</button>
         <button id="linkMode" aria-pressed="false">糸でつなぐ</button>
         <span class="spacer"></span>
@@ -97,6 +89,11 @@
         <button id="exportBoard" title="ブラウザで見られる1枚のHTMLにする（読み込みには使えません）">HTMLとして保存</button>
         <button id="clearBoard" class="danger">全部はがす</button>
       </div>
+      <!-- ボードのタブ（ダブルクリックで名前を変える、× で削除、＋ で新しいボード） -->
+      <nav class="board-tabs" aria-label="ボード">
+        <div class="board-tab-list" id="boardTabs" role="tablist"></div>
+        <button class="board-tab-new" id="boardNew" title="空のボードを新しく作る" aria-label="新しいボード">＋</button>
+      </nav>
       <div class="board-scroll" id="boardScroll">
         <div class="board" id="board">
           <span class="board-origin" aria-hidden="true"></span>

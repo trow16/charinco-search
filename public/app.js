@@ -1881,7 +1881,7 @@ const save = () => {
   if (entry && entry.count !== board.cards.length) {
     entry.count = board.cards.length;
     saveBoards();
-    renderBoardSelect();
+    renderBoardTabs();
   }
   $("#boardCount").textContent = board.cards.length;
   $("#boardEmpty").hidden = board.cards.length > 0;
@@ -2287,13 +2287,36 @@ $("#clearBoard").addEventListener("click", () => {
 $("#exportBoard").addEventListener("click", exportBoard);
 
 /* ---------- ボードの切り替え・作成・書き出し・読み込み ---------- */
-function renderBoardSelect() {
-  $("#boardSelect").replaceChildren(
-    ...boards.list.map((x) => el("option", { value: x.id, selected: x.id === boards.current }, `${x.name}（${x.count ?? 0}）`))
+// ボードのタブ：押すと切り替え、選んでいるタブをダブルクリックで名前を変える、× で削除
+function renderBoardTabs() {
+  $("#boardTabs").replaceChildren(
+    ...boards.list.map((x) => {
+      const active = x.id === boards.current;
+      return el(
+        "div",
+        { class: "board-tab", "aria-current": String(active) },
+        el(
+          "button",
+          {
+            class: "board-tab-open",
+            role: "tab",
+            "aria-selected": String(active),
+            title: active ? `${x.name}\nダブルクリックで名前を変える` : x.name,
+            onclick: () => switchBoard(x.id),
+            ondblclick: () => renameBoard(x.id),
+          },
+          el("span", { class: "board-tab-name" }, x.name),
+          el("span", { class: `count${x.count ? "" : " zero"}` }, String(x.count ?? 0))
+        ),
+        el("button", { class: "board-tab-close", title: "このボードを削除", "aria-label": `${x.name} を削除`, onclick: () => deleteBoard(x.id) }, "×")
+      );
+    })
   );
+  requestAnimationFrame(() => $('#boardTabs .board-tab[aria-current="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" }));
 }
 function switchBoard(id) {
-  if (id === boards.current || !boards.list.some((x) => x.id === id)) return renderBoardSelect();
+  // 今のタブを押しても描き直さない（描き直すとダブルクリックの2回目が届かない）
+  if (id === boards.current || !boards.list.some((x) => x.id === id)) return;
   writeView(); // 今のボードの表示位置を覚えてから切り替える
   boards.current = id;
   saveBoards();
@@ -2305,7 +2328,7 @@ function switchBoard(id) {
   loadView(id);
   applyView();
   renderBoard();
-  renderBoardSelect();
+  renderBoardTabs();
 }
 // 新しいボードを一覧に足して、そちらに切り替える
 function addBoard(name, data = emptyBoard()) {
@@ -2332,39 +2355,42 @@ const askName = (message, value) => {
   return v == null ? null : v.trim().slice(0, 40) || null;
 };
 
-$("#boardSelect").addEventListener("change", (e) => switchBoard(e.target.value));
 $("#boardNew").addEventListener("click", () => {
   const name = askName("新しいボードの名前", uniqueName(`ボード ${boards.list.length + 1}`));
   if (name && addBoard(uniqueName(name))) toast(`「${currentEntry().name}」を作りました`);
 });
-$("#boardRename").addEventListener("click", () => {
-  const entry = currentEntry();
-  const name = askName("ボードの名前", entry.name);
+function renameBoard(id) {
+  const entry = boards.list.find((x) => x.id === id);
+  const name = entry && askName("ボードの名前", entry.name);
   if (!name || name === entry.name) return;
   entry.name = name;
   saveBoards();
-  renderBoardSelect();
-});
-$("#boardDelete").addEventListener("click", () => {
-  const entry = currentEntry();
+  renderBoardTabs();
+}
+function deleteBoard(id) {
+  const entry = boards.list.find((x) => x.id === id);
+  if (!entry) return;
   if (boards.list.length === 1) return toast("ボードが1つだけのときは削除できません（中身を消すときは「全部はがす」）");
   const note = entry.count ? `カード ${entry.count} 枚も一緒に消えます。残したいときは先に「書き出す」してください。` : "";
   if (!confirm(`「${entry.name}」を削除しますか？\n${note}`)) return;
   const i = boards.list.indexOf(entry);
   boards.list.splice(i, 1);
-  store.remove(boardKey(entry.id));
-  store.remove(viewKey(entry.id));
-  clearTimeout(viewSaveTimer); // 消したボードの表示位置は書かない
-  const next = boards.list[Math.min(i, boards.list.length - 1)];
-  boards.current = next.id;
+  store.remove(boardKey(id));
+  store.remove(viewKey(id));
+  // 見ているボードを消したら隣のボードへ（消したボードの表示位置は書かない）
+  if (id === boards.current) {
+    clearTimeout(viewSaveTimer);
+    const next = boards.list[Math.min(i, boards.list.length - 1)];
+    boards.current = next.id;
+    board = loadBoard(next.id);
+    loadView(next.id);
+    applyView();
+    renderBoard();
+  }
   saveBoards();
-  board = loadBoard(next.id);
-  loadView(next.id);
-  applyView();
-  renderBoard();
-  renderBoardSelect();
+  renderBoardTabs();
   toast(`「${entry.name}」を削除しました`);
-});
+}
 
 // 書き出し：ボード1つを .json に。読み込むと同じものが新しいボードとして戻る
 const BOARD_FILE = "charinco-board";
@@ -2517,5 +2543,5 @@ document.addEventListener("keydown", (e) => {
 renderPageTabs();
 history.replaceState(navState(), "");
 
-renderBoardSelect();
+renderBoardTabs();
 renderBoard();
