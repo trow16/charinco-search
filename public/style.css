@@ -397,6 +397,7 @@ main { padding: 0 0 60px; }
 .board-tab-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .board-tab .count { flex-shrink: 0; font-size: 11px; min-width: 18px; }
 .board-tab:not([aria-current="true"]) .count, .board-tab .count.zero { background: var(--line); color: var(--ink-2); }
+.board-tab-input { margin: 4px 2px 4px 8px; padding: 2px 6px; border: 1px solid var(--accent); border-radius: 4px; background: #fff; color: var(--ink); font: inherit; font-size: 13px; font-weight: 700; outline: none; box-shadow: 0 0 0 2px rgba(181,69,47,.15); }
 .board-tab-close { flex-shrink: 0; width: 22px; height: 22px; margin-right: 6px; border: 0; border-radius: 4px; background: none; color: var(--ink-2); font-size: 14px; line-height: 1; cursor: pointer; opacity: 0; }
 .board-tab:hover .board-tab-close, .board-tab[aria-current="true"] .board-tab-close, .board-tab-close:focus-visible { opacity: 1; }
 .board-tab-close:hover { background: var(--paper-2); color: var(--accent); }

@@ -2294,7 +2294,7 @@ function renderBoardTabs() {
       const active = x.id === boards.current;
       return el(
         "div",
-        { class: "board-tab", "aria-current": String(active) },
+        { class: "board-tab", "data-id": x.id, "aria-current": String(active) },
         el(
           "button",
           {
@@ -2350,22 +2350,39 @@ function uniqueName(name) {
   if (!names.has(name)) return name;
   for (let i = 2; ; i++) if (!names.has(`${name} (${i})`)) return `${name} (${i})`;
 }
-const askName = (message, value) => {
-  const v = prompt(message, value);
-  return v == null ? null : v.trim().slice(0, 40) || null;
-};
-
+// 新しいボード：仮の名前で作り、そのままタブの上で名前を入力できるようにする
 $("#boardNew").addEventListener("click", () => {
-  const name = askName("新しいボードの名前", uniqueName(`ボード ${boards.list.length + 1}`));
-  if (name && addBoard(uniqueName(name))) toast(`「${currentEntry().name}」を作りました`);
+  if (addBoard(uniqueName(`ボード ${boards.list.length + 1}`))) renameBoard(boards.current);
 });
+// タブの名前をその場で書き換える。Enter か、ほかを押すと決定、Esc でやめる（空にしたら元の名前のまま）
 function renameBoard(id) {
   const entry = boards.list.find((x) => x.id === id);
-  const name = entry && askName("ボードの名前", entry.name);
-  if (!name || name === entry.name) return;
-  entry.name = name;
-  saveBoards();
-  renderBoardTabs();
+  const btn = $(`#boardTabs .board-tab[data-id="${id}"] .board-tab-open`);
+  if (!entry || !btn) return;
+  const input = el("input", { class: "board-tab-input", value: entry.name, maxlength: "40", "aria-label": "ボードの名前", spellcheck: "false" });
+  const fit = () => (input.style.width = `${Math.min(16, Math.max(4, [...input.value].length + 1.5))}em`);
+  let done = false;
+  const finish = (ok) => {
+    if (done) return;
+    done = true;
+    const name = input.value.trim().slice(0, 40);
+    if (ok && name && name !== entry.name) {
+      entry.name = name;
+      saveBoards();
+    }
+    renderBoardTabs();
+  };
+  input.addEventListener("input", fit);
+  input.addEventListener("keydown", (e) => {
+    if (e.isComposing || e.keyCode === 229) return; // 日本語の変換を確定する Enter では決定しない
+    if (e.key === "Enter") (e.preventDefault(), finish(true));
+    else if (e.key === "Escape") (e.preventDefault(), e.stopPropagation(), finish(false));
+  });
+  input.addEventListener("blur", () => finish(true));
+  btn.replaceWith(input);
+  fit();
+  input.focus();
+  input.select();
 }
 function deleteBoard(id) {
   const entry = boards.list.find((x) => x.id === id);
