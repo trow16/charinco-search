@@ -1,5 +1,6 @@
 // POST /api/parallel  { query, seed?: {title, snippet}, trail?: string[] } -> { home, shifts }
-import { parallelShifts, HttpError } from "../lib/claude.js";
+import { parallelShifts } from "../lib/claude.js";
+import { HttpError } from "../lib/errors.js";
 import { handle, readBody, isMock } from "../lib/http.js";
 import { mockShifts } from "../lib/mock.js";
 

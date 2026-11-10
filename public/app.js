@@ -35,14 +35,52 @@ const hash = (s) => {
   for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
   return h >>> 0;
 };
-const safeUrl = (u) => {
+// http(s) の URL なら絶対 URL にして返す。それ以外（javascript: や壊れた URL）は null
+const httpUrl = (href, base) => {
   try {
-    const x = new URL(u);
-    return /^https?:$/.test(x.protocol) ? x.href : "#";
+    const u = new URL(href, base);
+    return /^https?:$/.test(u.protocol) ? u.href : null;
   } catch {
-    return "#";
+    return null;
   }
 };
+const safeUrl = (u) => httpUrl(u) ?? "#";
+// 文字の入力中か（そのときは 1文字のショートカットキーを効かせない）
+const isTyping = (e) => !!(e.target.isContentEditable || e.target.closest?.("input,textarea,select"));
+// localStorage は使えないこと（プライベートウィンドウ・容量切れ）もあるので、失敗しても止まらないようにする
+const store = {
+  get(key) {
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  },
+  getJSON(key) {
+    try {
+      return JSON.parse(localStorage.getItem(key));
+    } catch {
+      return null;
+    }
+  },
+  /** 保存できなければそのエラーを返す */
+  set(key, value) {
+    try {
+      localStorage.setItem(key, typeof value === "string" ? value : JSON.stringify(value));
+      return null;
+    } catch (err) {
+      return err;
+    }
+  },
+};
+// 件数に上限のある覚え書き。なければ make() で作って入れる（上限を超えたら、いちばん古く入れたものから捨てる）
+function remember(map, key, make, max) {
+  if (!map.has(key)) {
+    if (map.size >= max) map.delete(map.keys().next().value);
+    map.set(key, make());
+  }
+  return map.get(key);
+}
 
 function toast(msg) {
   const t = $("#toast");
@@ -54,13 +92,7 @@ function toast(msg) {
 
 // 公開環境で ACCESS_CODE が設定されている場合の合言葉
 const CODE_KEY = "charinco.code";
-const getCode = () => {
-  try {
-    return localStorage.getItem(CODE_KEY) || "";
-  } catch {
-    return "";
-  }
-};
+const getCode = () => store.get(CODE_KEY) || "";
 
 async function api(path, body, retried = false) {
   const res = await fetch(path, {
@@ -77,9 +109,7 @@ async function api(path, body, retried = false) {
   if (res.status === 401 && !retried) {
     const code = prompt("合言葉を入力してください");
     if (code) {
-      try {
-        localStorage.setItem(CODE_KEY, code.trim());
-      } catch {}
+      store.set(CODE_KEY, code.trim());
       return api(path, body, true);
     }
   }
@@ -102,6 +132,13 @@ const state = {
 /* =========================================================
    検索パイプライン：平行にずらす → 書架ごとに本を集める
    ========================================================= */
+// 図書館タブの中身を切り替える："welcome"（最初の画面）/ "loading" / "library"（検索結果）/ "error"
+function showScreen(name) {
+  $("#welcome").hidden = name !== "welcome";
+  $("#loading").hidden = name !== "loading";
+  $("#error").hidden = name !== "error";
+  $("#hallWrap").hidden = $("#shifts").hidden = name !== "library";
+}
 function setStep(step) {
   const order = ["shift", "search"];
   const idx = order.indexOf(step);
@@ -136,18 +173,12 @@ async function explore({ query, kind = null, from = null, seed = null, reset = f
   renderTrail();
   $("#q").value = query;
 
-  $("#welcome").hidden = true;
-  $("#error").hidden = true;
-  $("#hallWrap").hidden = true;
-  $("#shifts").hidden = true;
-  $("#loading").hidden = false;
+  showScreen("loading");
   setStep("shift");
 
   const fail = (err) => {
     $("#error").textContent = err.message;
-    $("#error").hidden = false;
-    $("#hallWrap").hidden = true;
-    $("#shifts").hidden = true;
+    showScreen("error");
     state.trail.pop();
     state.current = state.trail.length - 1;
     renderTrail();
@@ -169,7 +200,6 @@ async function explore({ query, kind = null, from = null, seed = null, reset = f
     state.books = books;
     state.filter = null;
     state.pending = new Set([home, ...shifts.map((s) => s.ndc)]);
-    $("#loading").hidden = true;
     renderLibrary();
 
     const fill = (ndc, results, origin, shiftIndex, limit) => {
@@ -241,10 +271,7 @@ function goStep(i) {
   if (i < 0) {
     state.current = -1;
     $("#q").value = "";
-    $("#welcome").hidden = false;
-    $("#hallWrap").hidden = true;
-    $("#shifts").hidden = true;
-    $("#error").hidden = true;
+    showScreen("welcome");
     renderTrail();
     return true;
   }
@@ -331,9 +358,7 @@ function closeReader() {
 const collator = new Intl.Collator("ja");
 
 function renderLibrary() {
-  $("#welcome").hidden = true;
-  $("#hallWrap").hidden = false;
-  $("#shifts").hidden = false;
+  showScreen("library");
 
   // 凡例（今回使われたずらし方だけ）
   const kinds = [...new Set(state.shifts.map((s) => s.kind))];
@@ -342,7 +367,6 @@ function renderLibrary() {
     ...kinds.map((k) => el("span", {}, el("i", { style: `background:${kindColor(k)}` }), k))
   );
 
-  const hall = $("#hall");
   hall.classList.remove("filtering");
   hall.replaceChildren(...NDC.map((_, ndc) => shelfCase(ndc)));
   hall.scrollLeft = 0;
@@ -474,7 +498,6 @@ function toggleFilter(i) {
 }
 
 function applyFilter() {
-  const hall = $("#hall");
   const on = state.filter != null;
   hall.classList.toggle("filtering", on);
   $$(".book", hall).forEach((b) => b.classList.toggle("match", on && b.dataset.shift === String(state.filter)));
@@ -517,27 +540,23 @@ addEventListener("resize", updateHallNav);
    本を手に取る
    ========================================================= */
 // ページの取り寄せ：本を手に取った時点で先に始めておき、結果を覚えておく
+// 失敗したらもう一度取りに行けるよう忘れる
 const clipCache = new Map();
-function fetchClip(url) {
-  if (!clipCache.has(url)) {
+const fetchClip = (url) =>
+  remember(clipCache, url, () => {
     const p = api(`/api/clip?url=${encodeURIComponent(url)}`);
     p.catch(() => clipCache.delete(url));
-    if (clipCache.size >= 30) clipCache.delete(clipCache.keys().next().value);
-    clipCache.set(url, p);
-  }
-  return clipCache.get(url);
-}
-// 本物の Chrome で描画して写し取った版（時間がかかるので、本を手に取った時点で頼んでおく）
+    return p;
+  }, 30);
+// 本物の Chrome で描画して写し取った版（時間がかかるので、本を手に取った時点で頼んでおく）。
+// 失敗しても覚えておき、同じページで何度も待たせない
 const renderCache = new Map();
-function fetchRendered(url) {
-  if (!renderCache.has(url)) {
+const fetchRendered = (url) =>
+  remember(renderCache, url, () => {
     const p = api(`/api/clip?url=${encodeURIComponent(url)}&mode=render`);
     p.catch(() => {});
-    if (renderCache.size >= 30) renderCache.delete(renderCache.keys().next().value);
-    renderCache.set(url, p);
-  }
-  return renderCache.get(url);
-}
+    return p;
+  }, 30);
 
 let openedBook = null;
 function openBook(b) {
@@ -700,8 +719,7 @@ $("#modeClip").addEventListener("click", () => setClipMode(true));
 setClipMode(false);
 // リーダーの外（「読みやすい表示」やバー）にフォーカスがあるときの C キー
 document.addEventListener("keydown", (e) => {
-  if ($("#reader").hidden || clipPreview || e.ctrlKey || e.metaKey || e.altKey) return;
-  if (e.target.closest?.("input,textarea,[contenteditable='true']")) return;
+  if ($("#reader").hidden || clipPreview || e.ctrlKey || e.metaKey || e.altKey || isTyping(e)) return;
   if (e.key === "c" || e.key === "C") {
     e.preventDefault();
     setClipMode(!clipping);
@@ -747,17 +765,9 @@ function buildPageDoc(html, baseUrl) {
   }
   // CSS とフォントは自分のサーバー経由で読む（他サイトのフォントは localhost からだと拒否されるため）
   const relay = (abs) => `${location.origin}/api/asset?url=${encodeURIComponent(abs)}`;
-  const absUrl = (href, base) => {
-    try {
-      const u = new URL(href, base);
-      return /^https?:$/.test(u.protocol) ? u.href : null;
-    } catch {
-      return null;
-    }
-  };
   const styles = [];
   for (const link of $$('link[rel~="stylesheet"][href]', doc)) {
-    const abs = absUrl(link.getAttribute("href"), baseUrl);
+    const abs = httpUrl(link.getAttribute("href"), baseUrl);
     if (abs) styles.push(relay(abs));
     if (abs) link.setAttribute("href", relay(abs));
     link.removeAttribute("integrity");
@@ -766,7 +776,7 @@ function buildPageDoc(html, baseUrl) {
   $$('link[rel="preload"][as="font"]', doc).forEach((n) => n.remove());
   for (const st of $$("style", doc)) {
     st.textContent = st.textContent.replace(/url\(\s*(["']?)([^"')]+)\1\s*\)/gi, (m, _q, href) => {
-      const abs = absUrl(href.trim(), baseUrl);
+      const abs = httpUrl(href.trim(), baseUrl);
       return abs && /\.(woff2?|ttf|otf|eot)([?#]|$)/i.test(abs) ? `url("${relay(abs)}")` : m;
     });
   }
@@ -787,15 +797,8 @@ html{scroll-behavior:auto!important}
 
 // 本を手に取った時点で、ページの取り寄せ・組み立て・CSSの読み込みまで済ませておく
 const builtCache = new Map();
-const builtKey = (page) => (page.rendered ? "render:" : "static:") + page.url;
-function buildCached(page) {
-  const key = builtKey(page);
-  if (!builtCache.has(key)) {
-    if (builtCache.size >= 20) builtCache.delete(builtCache.keys().next().value);
-    builtCache.set(key, buildPageDoc(page.html, page.base || page.url));
-  }
-  return builtCache.get(key);
-}
+const buildCached = (page) =>
+  remember(builtCache, (page.rendered ? "render:" : "static:") + page.url, () => buildPageDoc(page.html, page.base || page.url), 20);
 function prepareClip(url) {
   const idle = window.requestIdleCallback || ((f) => setTimeout(f, 30));
   const warm = (page) =>
@@ -820,6 +823,8 @@ function finishClip(raw) {
   return html;
 }
 const serializeStyled = (root, keep, trimText) => finishClip(CharincoClip.serialize(root, keep, trimText));
+// 切り抜きカードの幅（ボード上で読める範囲に収める）
+const clipCardWidth = (w) => Math.max(200, Math.min(560, Math.round(w)));
 
 let readerToken = 0;
 let readerCleanup = null;
@@ -1034,7 +1039,8 @@ async function openReader(b) {
 
 // 切り抜く前の確認：ボードに貼られる姿を見せ、「貼る／やめる」を選んでもらう
 let clipPreview = null; // { confirm, cancel }
-function openClipPreview({ html, w, count, onConfirm }) {
+// onClose は、貼っても・やめても、閉じたときに呼ぶ（元のページで光らせていた枠を消すなど）
+function openClipPreview({ html, w, count, onConfirm, onClose }) {
   closeClipPreview();
   const reader = $("#reader");
   const content = el("div", { class: "content" });
@@ -1046,6 +1052,7 @@ function openClipPreview({ html, w, count, onConfirm }) {
     wrap.remove();
     clipPreview = null;
     if (ok) onConfirm(note.value.trim());
+    onClose?.();
   };
   const okBtn = el("button", { class: "btn primary", onclick: () => finish(true) }, "ボードに貼る");
   const note = el("textarea", {
@@ -1081,6 +1088,31 @@ function closeClipPreview() {
   clipPreview?.cancel();
 }
 
+// 切り抜き画面のキーのうち、表示のしかた（ライブ／写し取り）によらないもの。処理したら true
+function handleReaderKey(e, cancelDrag) {
+  if (clipPreview) {
+    // コメント欄では Enter は改行。⌘/Ctrl+Enter で貼る
+    if (e.key === "Enter" && e.target.closest?.("textarea") && !e.metaKey && !e.ctrlKey) return true;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      clipPreview.confirm();
+    } else if (e.key === "Escape") {
+      e.stopImmediatePropagation();
+      clipPreview.cancel();
+    }
+    return true;
+  }
+  if (e.key === "Escape") {
+    // 後ろの本の説明（ドロワー）まで一緒に閉じないよう、ここで止める。
+    // 範囲選択中なら選択だけをやめ、そうでなければ切り抜き画面を閉じる
+    e.stopImmediatePropagation();
+    if (!cancelDrag()) closeReader();
+    return true;
+  }
+  return false;
+}
+
 function renderPage(page, b, fallback, scrollRatio = 0) {
   const body = $("#readerBody");
   const hint = $("#readerHint");
@@ -1109,27 +1141,7 @@ function renderPage(page, b, fallback, scrollRatio = 0) {
   const { blockOf, collectRange } = CharincoClip;
   let cancelDrag = null;
   const onKey = (e) => {
-    if ($("#reader").hidden) return;
-    if (clipPreview) {
-      // コメント欄では Enter は改行。⌘/Ctrl+Enter で貼る
-      if (e.key === "Enter" && e.target.closest?.("textarea") && !e.metaKey && !e.ctrlKey) return;
-      if (e.key === "Enter") {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        clipPreview.confirm();
-      } else if (e.key === "Escape") {
-        e.stopImmediatePropagation();
-        clipPreview.cancel();
-      }
-      return;
-    }
-    // 範囲選択中の Esc は選択だけをやめる（画面全体の「Escで閉じる」より先に受け取る）
-    if (e.key === "Escape" && cancelDrag?.()) return e.stopImmediatePropagation();
-    if (e.key === "Escape") {
-      e.stopImmediatePropagation(); // 後ろの本の説明（ドロワー）まで一緒に閉じないように
-      closeReader();
-      return;
-    }
+    if ($("#reader").hidden || handleReaderKey(e, () => cancelDrag?.())) return;
     if (!clipping || !current) return;
     if (e.key === "ArrowUp") {
       const p = current.parentElement;
@@ -1146,6 +1158,20 @@ function renderPage(page, b, fallback, scrollRatio = 0) {
       clipCurrent();
     }
   };
+  // プレビューで確かめてから貼る。貼ったら元のページの該当部分に印を付ける
+  const previewAndPaste = (nodes, html, w, doneMsg, onClose) =>
+    openClipPreview({
+      html,
+      w,
+      count: nodes.length,
+      onClose,
+      onConfirm: (comment) => {
+        nodes.forEach((n) => n.classList.add(CLIPPED));
+        body.dataset.clipped = "1";
+        addCard({ type: "clip", styled: true, html, src: { title, url: page.url }, w, comment });
+        toast(doneMsg);
+      },
+    });
   // 集めた要素を、共通の親ごと1枚のカードにする（枠に掛からなかった兄弟は持ち出さない）
   const clipRange = (doc, picked) => {
     if (!picked.length) return toast("枠の中に切り抜ける部分がありませんでした");
@@ -1155,27 +1181,11 @@ function renderPage(page, b, fallback, scrollRatio = 0) {
     } catch (err) {
       return toast(err.message);
     }
-    const w = CharincoClip.cardWidth(picked);
-    // プレビュー中も、どこを切り抜くのか元のページ上で分かるようにしておく
+    // プレビュー中も、どこを切り抜くのか元のページ上で分かるようにしておき、閉じたら消す
     picked.forEach((n) => n.classList.add(HL));
-    openClipPreview({
-      html,
-      w,
-      count: picked.length,
-      onConfirm: (comment) => {
-        picked.forEach((n) => n.classList.add(CLIPPED));
-        body.dataset.clipped = "1";
-        addCard({ type: "clip", styled: true, html, src: { title, url: page.url }, w, comment });
-        toast(`囲んだ ${picked.length} か所をまとめて貼りました`);
-      },
-    });
-    // 閉じたら光らせていた枠を消す
-    const done = clipPreview;
-    const watch = setInterval(() => {
-      if (clipPreview === done) return;
-      clearInterval(watch);
-      picked.forEach((n) => n.classList.remove(HL));
-    }, 100);
+    previewAndPaste(picked, html, CharincoClip.cardWidth(picked), `囲んだ ${picked.length} か所をまとめて貼りました`, () =>
+      picked.forEach((n) => n.classList.remove(HL))
+    );
   };
 
   const clipCurrent = () => {
@@ -1186,19 +1196,7 @@ function renderPage(page, b, fallback, scrollRatio = 0) {
     } catch (err) {
       return toast(err.message);
     }
-    const target = current;
-    const w = Math.max(200, Math.min(560, Math.round(target.getBoundingClientRect().width) + 16));
-    openClipPreview({
-      html,
-      w,
-      count: 1,
-      onConfirm: (comment) => {
-        target.classList.add(CLIPPED);
-        body.dataset.clipped = "1";
-        addCard({ type: "clip", styled: true, html, src: { title, url: page.url }, w, comment });
-        toast("元のデザインのまま貼りました");
-      },
-    });
+    previewAndPaste([current], html, clipCardWidth(current.getBoundingClientRect().width + 16), "元のデザインのまま貼りました");
   };
 
   // 画像やCSSを待たず、HTMLの読み込みが終わった時点で操作できるようにする
@@ -1330,8 +1328,7 @@ function renderPage(page, b, fallback, scrollRatio = 0) {
     doc.addEventListener("keydown", onKey);
     // ページの中にフォーカスがあるときの C キー（外側の document には届かないため）
     doc.addEventListener("keydown", (e) => {
-      if (clipPreview || e.ctrlKey || e.metaKey || e.altKey || (e.key !== "c" && e.key !== "C")) return;
-      if (e.target.closest?.("input,textarea,select,[contenteditable='true']")) return;
+      if (clipPreview || e.ctrlKey || e.metaKey || e.altKey || isTyping(e) || (e.key !== "c" && e.key !== "C")) return;
       e.preventDefault();
       setClipMode(!clipping);
     });
@@ -1550,14 +1547,8 @@ async function renderLive(b, token, onFail) {
             enqueue({ action: "mark" });
             toast(r.count > 1 ? `囲んだ ${r.count} か所をまとめて貼りました` : "元のデザインのまま貼りました");
           },
+          onClose: clearMarks, // プレビューを閉じたら枠を消す
         });
-        // プレビューを閉じたら枠を消す
-        const shown = clipPreview;
-        const watch = setInterval(() => {
-          if (clipPreview === shown) return;
-          clearInterval(watch);
-          clearMarks();
-        }, 100);
       },
     });
   const cancelDrag = () => {
@@ -1705,26 +1696,7 @@ async function renderLive(b, token, onFail) {
 
   // ---- 切り抜き画面全体のキー ----
   const onKey = (e) => {
-    if ($("#reader").hidden) return;
-    if (clipPreview) {
-      // コメント欄では Enter は改行。⌘/Ctrl+Enter で貼る
-      if (e.key === "Enter" && e.target.closest?.("textarea") && !e.metaKey && !e.ctrlKey) return;
-      if (e.key === "Enter") {
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        clipPreview.confirm();
-      } else if (e.key === "Escape") {
-        e.stopImmediatePropagation();
-        clipPreview.cancel();
-      }
-      return;
-    }
-    if (e.key === "Escape" && cancelDrag()) return e.stopImmediatePropagation();
-    if (e.key === "Escape") {
-      e.stopImmediatePropagation();
-      closeReader();
-      return;
-    }
+    if ($("#reader").hidden || handleReaderKey(e, cancelDrag)) return;
     if (!clipping || !point) return;
     if (e.key === "ArrowUp" && canUp) {
       e.preventDefault();
@@ -1861,16 +1833,13 @@ function renderSimple(page, fallback) {
    ========================================================= */
 const STORE = "charinco.board.v1";
 let board = { cards: [], links: [] };
-try {
-  const saved = JSON.parse(localStorage.getItem(STORE) || "null");
+{
+  const saved = store.getJSON(STORE);
   if (saved?.cards) board = saved;
-} catch {}
+}
 const save = () => {
-  try {
-    localStorage.setItem(STORE, JSON.stringify(board));
-  } catch (err) {
-    if (err?.name === "QuotaExceededError") toast("保存容量がいっぱいです。いくつかカードをはがすか「HTMLとして保存」してください");
-  }
+  if (store.set(STORE, board)?.name === "QuotaExceededError")
+    toast("保存容量がいっぱいです。いくつかカードをはがすか「HTMLとして保存」してください");
   $("#boardCount").textContent = board.cards.length;
   $("#boardEmpty").hidden = board.cards.length > 0;
 };
@@ -1899,16 +1868,16 @@ function addCard(card) {
   return card;
 }
 
-// 拡張機能のツールバーの「図書館へ」「ボードへ」
+// 拡張機能（extension/bridge.js）から届くもの
 addEventListener("message", (e) => {
-  if (e.source !== window || e.origin !== location.origin || e.data?.charincoExt !== "view") return;
-  if (["library", "board"].includes(e.data.view)) $(`.tabs button[data-view="${e.data.view}"]`)?.click();
+  if (e.source !== window || e.origin !== location.origin) return;
+  const { charincoExt: type, view, card } = e.data || {};
+  // ツールバーの「図書館へ」「ボードへ」
+  if (type === "view" && ["library", "board"].includes(view)) $(`.tabs button[data-view="${view}"]`)?.click();
+  if (type === "clip") pasteFromExtension(card || {});
 });
-
-// 拡張機能で切り抜いたもの（extension/bridge.js から届く）をボードに貼る
-addEventListener("message", (e) => {
-  if (e.source !== window || e.origin !== location.origin || e.data?.charincoExt !== "clip") return;
-  const c = e.data.card || {};
+// 拡張機能で切り抜いたものをボードに貼る
+function pasteFromExtension(c) {
   let html;
   try {
     html = finishClip(String(c.html || ""));
@@ -1916,20 +1885,17 @@ addEventListener("message", (e) => {
     return toast(err.message);
   }
   if (!html.trim()) return;
-  let url = "";
-  try {
-    url = /^https?:$/.test(new URL(c.url).protocol) ? new URL(c.url).href : "";
-  } catch {}
+  const url = httpUrl(c.url) ?? "";
   addCard({
     type: "clip",
     styled: true,
     html,
     src: { title: String(c.title || url).slice(0, 200), url },
-    w: Math.max(200, Math.min(560, Number(c.w) || 320)),
+    w: clipCardWidth(Number(c.w) || 320),
     comment: String(c.comment || "").slice(0, 2000),
   });
   toast(`「${String(c.title || "ページ").slice(0, 30)}」から切り抜いて貼りました`);
-});
+}
 
 function pinBook(b) {
   addCard({
@@ -2045,25 +2011,22 @@ function renderBoard() {
 // panX/panY は「ボードの原点(0,0)が表示域のどこに来るか」（画面px）
 const ZOOM_MIN = 0.25, ZOOM_MAX = 2;
 const VIEW_KEY = "charinco-view";
+const clampZoom = (z) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
 let zoom = 1, panX = 0, panY = 0;
-try {
-  const v = JSON.parse(localStorage.getItem(VIEW_KEY) || "null");
+{
+  const v = store.getJSON(VIEW_KEY);
   if (v) {
-    zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Number(v.zoom) || 1));
+    zoom = clampZoom(Number(v.zoom) || 1);
     panX = Number(v.x) || 0;
     panY = Number(v.y) || 0;
   } else {
-    zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Number(localStorage.getItem("charinco-zoom")) || 1));
+    zoom = clampZoom(Number(store.get("charinco-zoom")) || 1); // 前の版で保存した倍率
   }
-} catch {}
+}
 let viewSaveTimer = 0;
 const saveView = () => {
   clearTimeout(viewSaveTimer);
-  viewSaveTimer = setTimeout(() => {
-    try {
-      localStorage.setItem(VIEW_KEY, JSON.stringify({ zoom, x: Math.round(panX), y: Math.round(panY) }));
-    } catch {}
-  }, 200);
+  viewSaveTimer = setTimeout(() => store.set(VIEW_KEY, { zoom, x: Math.round(panX), y: Math.round(panY) }), 200);
 };
 function applyView() {
   $("#board").style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
@@ -2076,7 +2039,7 @@ function applyView() {
 // anchor（画面上の点）の下にあるボード上の位置が動かないように拡大縮小する
 function setZoom(z, anchor = null) {
   const sc = $("#boardScroll");
-  z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 100) / 100));
+  z = clampZoom(Math.round(z * 100) / 100);
   const r = sc.getBoundingClientRect();
   const ax = anchor ? anchor.clientX - r.left : sc.clientWidth / 2;
   const ay = anchor ? anchor.clientY - r.top : sc.clientHeight / 2;
@@ -2156,8 +2119,7 @@ function canScrollInside(target, dx, dy) {
 }
 // キーボード：+ / - / 0 / F / H（文字の入力中は除く）
 document.addEventListener("keydown", (e) => {
-  if ($("#view-board").hidden || !$("#reader").hidden || e.ctrlKey || e.metaKey || e.altKey) return;
-  if (e.target.closest?.("input,textarea,[contenteditable='true']")) return;
+  if ($("#view-board").hidden || !$("#reader").hidden || e.ctrlKey || e.metaKey || e.altKey || isTyping(e)) return;
   if (e.key === "+" || e.key === "=") stepZoom(1);
   else if (e.key === "-") stepZoom(-1);
   else if (e.key === "0") setZoom(1);

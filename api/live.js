@@ -3,16 +3,15 @@
 //   GET  ?id=...&code=...    … 画面を流す（Server-Sent Events。EventSource はヘッダーを付けられないので合言葉はクエリで）
 //   POST { action: "open", url, w, h, dpr } → { id }
 //   POST { action: ..., id, ... }            … 入力の中継・切り抜き（lib/live.js）
-import { handle, isMock, json } from "../lib/http.js";
-import { HttpError } from "../lib/claude.js";
+import { handle, isMock, json, checkAccess, readBody } from "../lib/http.js";
+import { HttpError } from "../lib/errors.js";
 import { liveEnabled, open, stream, act } from "../lib/live.js";
-import { assertPublicUrl, isPrivateIP } from "./clip.js";
 
 export const GET = async (request) => {
   const q = new URL(request.url).searchParams;
   if (q.has("status")) return json({ enabled: !isMock() && liveEnabled() });
-  const code = process.env.ACCESS_CODE;
-  if (code && q.get("code") !== code) return json({ error: "合言葉が違います。" }, 401);
+  const denied = checkAccess(request, q.get("code"));
+  if (denied) return denied;
   try {
     return stream(q.get("id") || "");
   } catch (err) {
@@ -22,10 +21,10 @@ export const GET = async (request) => {
 
 export const POST = handle(async (request) => {
   if (isMock() || !liveEnabled()) throw new HttpError(503, "ライブ表示は使えません。");
-  const body = await request.json().catch(() => ({}));
+  const body = await readBody(request);
   if (body.action === "open") {
     if (typeof body.url !== "string") throw new HttpError(400, "url がありません。");
-    return open(body, { assertPublicUrl, isPrivateIP });
+    return open(body);
   }
   return act(body);
 });

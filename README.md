@@ -25,6 +25,10 @@ api/           サーバーの API（server.mjs が呼び出す）
   asset.js     切り抜き画面用に、元サイトの CSS とWebフォントを中継（アイコンや書体の崩れを防ぐ）
   live.js      ライブ表示：裏の Chrome のタブの画面を流し、クリック・スクロール・キー入力を中継する（lib/live.js）
 lib/           共通処理
+  net.js       外のサイトを取りに行くときの安全確認（手元のネットワークへは行かせない）と、リダイレクトをたどる取得
+  render.js    裏の Chrome で表示して写し取る ／ live.js  ライブ表示のタブ操作
+  claude.js    平行サジェスチョン（Claude） ／ brave.js  Web検索 ／ filter.js  切り抜けない結果を除く
+  http.js      API の受け答え ／ errors.js  エラー ／ cache.js  件数に上限のある覚え書き ／ mock.js  ダミーデータ
 extension/     Chrome 拡張機能「Charinco 切り抜き」（ふつうのタブの上で切り抜いてボードに送る）
 server.mjs     サーバー（http://localhost:3000）
 ```

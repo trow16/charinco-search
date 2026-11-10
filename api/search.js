@@ -1,6 +1,6 @@
 // POST /api/search  { queries: string[] }
 import { searchMany } from "../lib/brave.js";
-import { HttpError } from "../lib/claude.js";
+import { HttpError } from "../lib/errors.js";
 import { handle, readBody, isMock } from "../lib/http.js";
 import { mockSearch } from "../lib/mock.js";
 

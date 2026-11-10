@@ -2,7 +2,8 @@
 // 切り抜き画面はページを localhost 側で表示するため、他サイトのWebフォント（アイコンフォント含む）は
 // そのままだと読み込みを拒否され、アイコンが□になったり書体が変わってレイアウトが崩れたりする。
 // CSS とフォントだけをここで中継し、それ以外は元のURLへそのまま転送する。
-import { assertPublicUrl } from "./clip.js";
+import { remember } from "../lib/cache.js";
+import { fetchPublic } from "../lib/net.js";
 
 const FONT = /\.(woff2?|ttf|otf|eot)([?#]|$)/i;
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -71,25 +72,9 @@ export const GET = async (request) => {
   const hit = cache.get(original);
   if (hit) return respond(hit);
   try {
-    let res;
-    for (let hop = 0; hop < 5; hop++) {
-      await assertPublicUrl(u);
-      res = await fetch(u, {
-        redirect: "manual",
-        signal: AbortSignal.timeout(8000),
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 CharincoSearch/0.1",
-          Accept: "text/css,*/*;q=0.1",
-        },
-      });
-      if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
-        u = new URL(res.headers.get("location"), u);
-        continue;
-      }
-      break;
-    }
-    if (!res?.ok) return passThrough();
+    const { res, url } = await fetchPublic(u, { timeout: 8000, headers: { Accept: "text/css,*/*;q=0.1" } });
+    u = url;
+    if (!res.ok) return passThrough();
     if (Number(res.headers.get("content-length") || 0) > MAX_BYTES) return passThrough();
     const type = res.headers.get("content-type") || "";
     const buf = Buffer.from(await res.arrayBuffer());
@@ -103,9 +88,7 @@ export const GET = async (request) => {
     } else {
       return passThrough();
     }
-    if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value);
-    cache.set(original, out);
-    return respond(out);
+    return respond(remember(cache, original, out, CACHE_MAX));
   } catch {
     return passThrough();
   }
